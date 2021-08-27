@@ -2,9 +2,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
 # https://discuss.pytorch.org/t/is-this-a-correct-implementation-for-focal-loss-in-pytorch/43327/8
 class FocalLoss(nn.Module):
+
     def __init__(self, weight=None,
                  gamma=2., reduction='mean'):
         nn.Module.__init__(self)
@@ -24,6 +24,7 @@ class FocalLoss(nn.Module):
 
 
 class LabelSmoothingLoss(nn.Module):
+
     def __init__(self, classes=3, smoothing=0.0, dim=-1):
         super(LabelSmoothingLoss, self).__init__()
         self.confidence = 1.0 - smoothing
@@ -42,6 +43,7 @@ class LabelSmoothingLoss(nn.Module):
 
 # https://gist.github.com/SuperShinyEyes/dcc68a08ff8b615442e3bc6a9b55a354
 class F1Loss(nn.Module):
+
     def __init__(self, classes=3, epsilon=1e-7):
         super().__init__()
         self.classes = classes

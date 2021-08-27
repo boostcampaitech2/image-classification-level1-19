@@ -1,11 +1,13 @@
 import os
 import random
+import numpy as np
+import torch
+
+from albumentations import *
+from albumentations.pytorch import ToTensorV2
 from collections import defaultdict
 from enum import Enum
 from typing import Tuple, List
-
-import numpy as np
-import torch
 from PIL import Image
 from torch.utils.data import Dataset, Subset, random_split
 from torchvision import transforms
@@ -16,10 +18,8 @@ IMG_EXTENSIONS = [
     ".PNG", ".ppm", ".PPM", ".bmp", ".BMP",
 ]
 
-
 def is_image_file(filename):
     return any(filename.endswith(extension) for extension in IMG_EXTENSIONS)
-
 
 class BaseAugmentation:
     def __init__(self, resize, mean, std, **args):
@@ -32,13 +32,10 @@ class BaseAugmentation:
     def __call__(self, image):
         return self.transform(image)
 
-
+# ============================================
+# Custom Transform Ex
+# ============================================
 class AddGaussianNoise(object):
-    """
-        transform 에 없는 기능들은 이런식으로 __init__, __call__, __repr__ 부분을
-        직접 구현하여 사용할 수 있습니다.
-    """
-
     def __init__(self, mean=0., std=1.):
         self.std = std
         self.mean = mean
@@ -49,7 +46,9 @@ class AddGaussianNoise(object):
     def __repr__(self):
         return self.__class__.__name__ + '(mean={0}, std={1})'.format(self.mean, self.std)
 
-
+# ============================================
+# Custom Augmentation Ex
+# ============================================
 class CustomAugmentation:
     def __init__(self, resize, mean, std, **args):
         self.transform = transforms.Compose([
@@ -64,12 +63,10 @@ class CustomAugmentation:
     def __call__(self, image):
         return self.transform(image)
 
-
 class MaskLabels(int, Enum):
     MASK = 0
     INCORRECT = 1
     NORMAL = 2
-
 
 class GenderLabels(int, Enum):
     MALE = 0
@@ -84,7 +81,6 @@ class GenderLabels(int, Enum):
             return cls.FEMALE
         else:
             raise ValueError(f"Gender value should be either 'male' or 'female', {value}")
-
 
 class AgeLabels(int, Enum):
     YOUNG = 0
@@ -104,7 +100,6 @@ class AgeLabels(int, Enum):
             return cls.MIDDLE
         else:
             return cls.OLD
-
 
 class MaskBaseDataset(Dataset):
     num_classes = 3 * 2 * 3
@@ -137,13 +132,13 @@ class MaskBaseDataset(Dataset):
     def setup(self):
         profiles = os.listdir(self.data_dir)
         for profile in profiles:
-            if profile.startswith("."):  # "." 로 시작하는 파일은 무시합니다
+            if profile.startswith("."):
                 continue
 
             img_folder = os.path.join(self.data_dir, profile)
             for file_name in os.listdir(img_folder):
                 _file_name, ext = os.path.splitext(file_name)
-                if _file_name not in self._file_names:  # "." 로 시작하는 파일 및 invalid 한 파일들은 무시합니다
+                if _file_name not in self._file_names:
                     continue
 
                 img_path = os.path.join(self.data_dir, profile, file_name)  # (resized_data, 000004_male_Asian_54, mask1.jpg)
@@ -161,7 +156,7 @@ class MaskBaseDataset(Dataset):
     def calc_statistics(self):
         has_statistics = self.mean is not None and self.std is not None
         if not has_statistics:
-            print("[Warning] Calculating statistics... It can take a long time depending on your CPU machine")
+            print("[Warning] --- Calculating Statistics ---")
             sums = []
             squared = []
             for image_path in self.image_paths[:3000]:
@@ -176,7 +171,7 @@ class MaskBaseDataset(Dataset):
         self.transform = transform
 
     def __getitem__(self, index):
-        assert self.transform is not None, ".set_tranform 메소드를 이용하여 transform 을 주입해주세요"
+        assert self.transform is not None, "[Warning] --- You Must Set Transform ---"
 
         image = self.read_image(index)
         mask_label = self.get_mask_label(index)
@@ -224,25 +219,13 @@ class MaskBaseDataset(Dataset):
         return img_cp
 
     def split_dataset(self) -> Tuple[Subset, Subset]:
-        """
-        데이터셋을 train 과 val 로 나눕니다,
-        pytorch 내부의 torch.utils.data.random_split 함수를 사용하여
-        torch.utils.data.Subset 클래스 둘로 나눕니다.
-        구현이 어렵지 않으니 구글링 혹은 IDE (e.g. pycharm) 의 navigation 기능을 통해 코드를 한 번 읽어보는 것을 추천드립니다^^
-        """
         n_val = int(len(self) * self.val_ratio)
         n_train = len(self) - n_val
         train_set, val_set = random_split(self, [n_train, n_val])
         return train_set, val_set
 
-
+# Dataset based on people
 class MaskSplitByProfileDataset(MaskBaseDataset):
-    """
-        train / val 나누는 기준을 이미지에 대해서 random 이 아닌
-        사람(profile)을 기준으로 나눕니다.
-        구현은 val_ratio 에 맞게 train / val 나누는 것을 이미지 전체가 아닌 사람(profile)에 대해서 진행하여 indexing 을 합니다
-        이후 `split_dataset` 에서 index 에 맞게 Subset 으로 dataset 을 분기합니다.
-    """
 
     def __init__(self, data_dir, mean=(0.548, 0.504, 0.479), std=(0.237, 0.247, 0.246), val_ratio=0.2):
         self.indices = defaultdict(list)
@@ -272,7 +255,7 @@ class MaskSplitByProfileDataset(MaskBaseDataset):
                 img_folder = os.path.join(self.data_dir, profile)
                 for file_name in os.listdir(img_folder):
                     _file_name, ext = os.path.splitext(file_name)
-                    if _file_name not in self._file_names:  # "." 로 시작하는 파일 및 invalid 한 파일들은 무시합니다
+                    if _file_name not in self._file_names:
                         continue
 
                     img_path = os.path.join(self.data_dir, profile, file_name)  # (resized_data, 000004_male_Asian_54, mask1.jpg)

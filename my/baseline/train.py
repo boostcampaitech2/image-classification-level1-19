@@ -5,19 +5,18 @@ import multiprocessing
 import os
 import random
 import re
-from importlib import import_module
-from pathlib import Path
-
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+
+from inference import inference
+from importlib import import_module
+from pathlib import Path
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-
 from dataset import MaskBaseDataset
 from loss import create_criterion
-
 
 def seed_everything(seed):
     torch.manual_seed(seed)
@@ -27,7 +26,6 @@ def seed_everything(seed):
     torch.backends.cudnn.benchmark = False
     np.random.seed(seed)
     random.seed(seed)
-
 
 def get_lr(optimizer):
     for param_group in optimizer.param_groups:
@@ -67,7 +65,6 @@ def grid_image(np_images, gts, preds, n=16, shuffle=False):
 
 def increment_path(path, exist_ok=False):
     """ Automatically increment path, i.e. runs/exp --> runs/exp0, runs/exp1 etc.
-
     Args:
         path (str or pathlib.Path): f"{model_dir}/{args.name}".
         exist_ok (bool): whether increment path (increment if False).
@@ -85,7 +82,6 @@ def increment_path(path, exist_ok=False):
 
 def train(data_dir, model_dir, args):
     seed_everything(args.seed)
-
     save_dir = increment_path(os.path.join(model_dir, args.name))
 
     # -- settings
@@ -93,7 +89,7 @@ def train(data_dir, model_dir, args):
     device = torch.device("cuda" if use_cuda else "cpu")
 
     # -- dataset
-    dataset_module = getattr(import_module("dataset"), args.dataset)  # default: BaseAugmentation
+    dataset_module = getattr(import_module("dataset"), args.dataset)  # default: MaskSplitByProfileDataset
     dataset = dataset_module(
         data_dir=data_dir,
     )
@@ -106,6 +102,7 @@ def train(data_dir, model_dir, args):
         mean=dataset.mean,
         std=dataset.std,
     )
+
     dataset.set_transform(transform)
 
     # -- data_loader
@@ -130,11 +127,13 @@ def train(data_dir, model_dir, args):
     )
 
     # -- model
-    model_module = getattr(import_module("model"), args.model)  # default: BaseModel
+    model_module = getattr(import_module("model"), args.model)  # default: MyModel
     model = model_module(
-        num_classes=num_classes
+        model_name='resnet101'
     ).to(device)
-    model = torch.nn.DataParallel(model)
+
+    # model = torch.nn.DataParallel(model.model)
+    model = model.model
 
     # -- loss & metric
     criterion = create_criterion(args.criterion)  # default: cross_entropy
@@ -179,7 +178,7 @@ def train(data_dir, model_dir, args):
                 train_acc = matches / args.batch_size / args.log_interval
                 current_lr = get_lr(optimizer)
                 print(
-                    f"Epoch[{epoch}/{args.epochs}]({idx + 1}/{len(train_loader)}) || "
+                    f"Epoch[{epoch + 1}/{args.epochs}]({idx + 1}/{len(train_loader)}) || "
                     f"training loss {train_loss:4.4} || training accuracy {train_acc:4.2%} || lr {current_lr}"
                 )
                 logger.add_scalar("Train/loss", train_loss, epoch * len(train_loader) + idx)
@@ -192,7 +191,7 @@ def train(data_dir, model_dir, args):
 
         # val loop
         with torch.no_grad():
-            print("Calculating validation results...")
+            print("[Info] --- Calculating Validation Result ---")
             model.eval()
             val_loss_items = []
             val_acc_items = []
@@ -221,10 +220,10 @@ def train(data_dir, model_dir, args):
             val_acc = np.sum(val_acc_items) / len(val_set)
             best_val_loss = min(best_val_loss, val_loss)
             if val_acc > best_val_acc:
-                print(f"New best model for val accuracy : {val_acc:4.2%}! saving the best model..")
-                torch.save(model.module.state_dict(), f"{save_dir}/best.pth")
+                print(f"New best model for val accuracy : {val_acc:4.2%}! saving the best model")
+                torch.save(model.state_dict(), f"{save_dir}/best.pth")
                 best_val_acc = val_acc
-            torch.save(model.module.state_dict(), f"{save_dir}/last.pth")
+            torch.save(model.state_dict(), f"{save_dir}/last.pth")
             print(
                 f"[Val] acc : {val_acc:4.2%}, loss: {val_loss:4.2} || "
                 f"best acc : {best_val_acc:4.2%}, best loss: {best_val_loss:4.2}"
@@ -249,8 +248,8 @@ if __name__ == '__main__':
     parser.add_argument('--augmentation', type=str, default='BaseAugmentation', help='data augmentation type (default: BaseAugmentation)')
     parser.add_argument("--resize", nargs="+", type=list, default=[128, 96], help='resize size for image when training')
     parser.add_argument('--batch_size', type=int, default=64, help='input batch size for training (default: 64)')
-    parser.add_argument('--valid_batch_size', type=int, default=1000, help='input batch size for validing (default: 1000)')
-    parser.add_argument('--model', type=str, default='BaseModel', help='model type (default: BaseModel)')
+    parser.add_argument('--valid_batch_size', type=int, default=64, help='input batch size for validing (default: 1000)')
+    parser.add_argument('--model', type=str, default='MyModel', help='model type (default: MyModel)')
     parser.add_argument('--optimizer', type=str, default='SGD', help='optimizer type (default: SGD)')
     parser.add_argument('--lr', type=float, default=1e-3, help='learning rate (default: 1e-3)')
     parser.add_argument('--val_ratio', type=float, default=0.2, help='ratio for validaton (default: 0.2)')
@@ -260,13 +259,18 @@ if __name__ == '__main__':
     parser.add_argument('--name', default='exp', help='model save at {SM_MODEL_DIR}/{name}')
 
     # Container environment
-    parser.add_argument('--data_dir', type=str, default=os.environ.get('SM_CHANNEL_TRAIN', '/opt/ml/input/data/train/images'))
+    parser.add_argument('--train_data_dir', type=str, default=os.environ.get('SM_CHANNEL_TRAIN', '/opt/ml/input/data/train/images'))
+    parser.add_argument('--test_data_dir', type=str, default=os.environ.get('SM_CHANNEL_TRAIN', '/opt/ml/input/data/eval'))
     parser.add_argument('--model_dir', type=str, default=os.environ.get('SM_MODEL_DIR', './model'))
 
     args = parser.parse_args()
     print(args)
 
-    data_dir = args.data_dir
+    data_dir = args.train_data_dir
     model_dir = args.model_dir
-
     train(data_dir, model_dir, args)
+
+    # inference
+    data_dir = args.test_data_dir
+    output_dir = '/opt/ml/input/data/eval/submission'
+    inference(data_dir, model_dir, output_dir, args)
