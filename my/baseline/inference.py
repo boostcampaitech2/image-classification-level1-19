@@ -9,8 +9,12 @@ from dataset import TestDataset, MaskBaseDataset
 
 def load_model(saved_model, num_classes, device, args):
     model_cls = getattr(import_module("model"), args.model)
+    
+    # ==============================
+    # 학습 시, 모델명 변경 주의
+    # ==============================
     model = model_cls(
-        model_name='resnet101'
+        model_name='resnet18'
     )
 
     model = model.model
@@ -19,7 +23,7 @@ def load_model(saved_model, num_classes, device, args):
     # tar = tarfile.open(tarpath, 'r:gz')
     # tar.extractall(path=saved_model)
 
-    model_path = os.path.join(saved_model, 'proc/best.pth')
+    model_path = os.path.join(saved_model, 'proc3/best.pth')
     model.load_state_dict(torch.load(model_path, map_location=device))
 
     return model
@@ -67,8 +71,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     # Data and model checkpoints directories
-    parser.add_argument('--batch_size', type=int, default=1000, help='input batch size for validing (default: 1000)')
-    parser.add_argument('--resize', type=tuple, default=(96, 128), help='resize size for image when you trained (default: (96, 128))')
+    parser.add_argument('--batch_size', type=int, default=128, help='input batch size for validating (default: 1000)')
+    parser.add_argument('--resize', type=tuple, default=(224, 224), help='resize size for image when you trained (default: (96, 128))')
     parser.add_argument('--model', type=str, default='BaseModel', help='model type (default: BaseModel)')
 
     # Container environment

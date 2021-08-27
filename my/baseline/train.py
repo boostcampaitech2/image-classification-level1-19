@@ -17,6 +17,7 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from dataset import MaskBaseDataset
 from loss import create_criterion
+from sklearn.metrics import f1_score, roc_auc_score, confusion_matrix
 
 def seed_everything(seed):
     torch.manual_seed(seed)
@@ -62,7 +63,7 @@ def grid_image(np_images, gts, preds, n=16, shuffle=False):
 
     return figure
 
-
+# auto increment for path
 def increment_path(path, exist_ok=False):
     """ Automatically increment path, i.e. runs/exp --> runs/exp0, runs/exp1 etc.
     Args:
@@ -129,7 +130,7 @@ def train(data_dir, model_dir, args):
     # -- model
     model_module = getattr(import_module("model"), args.model)  # default: MyModel
     model = model_module(
-        model_name='resnet101'
+        model_name='resnet18'
     ).to(device)
 
     # model = torch.nn.DataParallel(model.model)
@@ -143,12 +144,27 @@ def train(data_dir, model_dir, args):
         lr=args.lr,
         weight_decay=5e-4
     )
-    scheduler = StepLR(optimizer, args.lr_decay_step, gamma=0.5)
+    scheduler = StepLR(optimizer, args.lr_decay_step, gamma=0.9)
 
     # -- logging
     logger = SummaryWriter(log_dir=save_dir)
     with open(os.path.join(save_dir, 'config.json'), 'w', encoding='utf-8') as f:
         json.dump(vars(args), f, ensure_ascii=False, indent=4)
+
+    config_list = [
+        'seed', 'epochs', 'dataset', 'augmentation', 'batch_size',
+        'optimizer', 'lr', 'val_ratio', 'criterion', 'lr_decay_step'
+    ]
+
+    final_config = dict()
+    config = json.load(open(os.path.join(save_dir, 'config.json')))
+    for k, v in config.items():
+        if k in config_list:
+            final_config[k] = v
+
+    # -- add hparams
+    with SummaryWriter() as w:
+        w.add_hparams(final_config, {'hparam/accuracy': 0, 'hparam/loss': 0})
 
     best_val_acc = 0
     best_val_loss = np.inf
@@ -177,16 +193,19 @@ def train(data_dir, model_dir, args):
                 train_loss = loss_value / args.log_interval
                 train_acc = matches / args.batch_size / args.log_interval
                 current_lr = get_lr(optimizer)
+
                 print(
                     f"Epoch[{epoch + 1}/{args.epochs}]({idx + 1}/{len(train_loader)}) || "
                     f"training loss {train_loss:4.4} || training accuracy {train_acc:4.2%} || lr {current_lr}"
                 )
+
                 logger.add_scalar("Train/loss", train_loss, epoch * len(train_loader) + idx)
                 logger.add_scalar("Train/accuracy", train_acc, epoch * len(train_loader) + idx)
 
                 loss_value = 0
                 matches = 0
 
+        # each epoch
         scheduler.step()
 
         # val loop
@@ -196,6 +215,7 @@ def train(data_dir, model_dir, args):
             val_loss_items = []
             val_acc_items = []
             figure = None
+
             for val_batch in val_loader:
                 inputs, labels = val_batch
                 inputs = inputs.to(device)
@@ -233,7 +253,6 @@ def train(data_dir, model_dir, args):
             logger.add_figure("results", figure, epoch)
             print()
 
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
@@ -246,7 +265,7 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', type=int, default=1, help='number of epochs to train (default: 1)')
     parser.add_argument('--dataset', type=str, default='MaskBaseDataset', help='dataset augmentation type (default: MaskBaseDataset)')
     parser.add_argument('--augmentation', type=str, default='BaseAugmentation', help='data augmentation type (default: BaseAugmentation)')
-    parser.add_argument("--resize", nargs="+", type=list, default=[128, 96], help='resize size for image when training')
+    parser.add_argument("--resize", nargs="+", type=list, default=[224, 224], help='resize size for image when training')
     parser.add_argument('--batch_size', type=int, default=64, help='input batch size for training (default: 64)')
     parser.add_argument('--valid_batch_size', type=int, default=64, help='input batch size for validing (default: 1000)')
     parser.add_argument('--model', type=str, default='MyModel', help='model type (default: MyModel)')

@@ -21,10 +21,14 @@ IMG_EXTENSIONS = [
 def is_image_file(filename):
     return any(filename.endswith(extension) for extension in IMG_EXTENSIONS)
 
+# ============================================
+# Default Aug
+# ============================================
 class BaseAugmentation:
     def __init__(self, resize, mean, std, **args):
         self.transform = transforms.Compose([
             Resize(resize, Image.BILINEAR),
+            CenterCrop(224),
             ToTensor(),
             Normalize(mean=mean, std=std),
         ])
@@ -282,6 +286,7 @@ class TestDataset(Dataset):
         self.img_paths = img_paths
         self.transform = transforms.Compose([
             Resize(resize, Image.BILINEAR),
+            CenterCrop(224),
             ToTensor(),
             Normalize(mean=mean, std=std),
         ])
