@@ -8,16 +8,21 @@ import re
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import torch.utils.data.sampler as sampler
+import torchvision.transforms as transforms
 
-from inference import inference
+from new.new_dataset import MaskDataset
 from importlib import import_module
 from pathlib import Path
+from dataset import MaskBaseDataset
+from inference import inference
+from loss import create_criterion
+from sklearn.model_selection import *
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-from dataset import MaskBaseDataset
-from loss import create_criterion
-from sklearn.metrics import f1_score, roc_auc_score, confusion_matrix
+from utils import test_prediction
+
 
 def seed_everything(seed):
     torch.manual_seed(seed)
@@ -38,8 +43,8 @@ def grid_image(np_images, gts, preds, n=16, shuffle=False):
     assert n <= batch_size
 
     choices = random.choices(range(batch_size), k=n) if shuffle else list(range(n))
-    figure = plt.figure(figsize=(12, 18 + 2))  # cautions: hardcoded, 이미지 크기에 따라 figsize 를 조정해야 할 수 있습니다. T.T
-    plt.subplots_adjust(top=0.8)               # cautions: hardcoded, 이미지 크기에 따라 top 를 조정해야 할 수 있습니다. T.T
+    figure = plt.figure(figsize=(12, 18 + 2))  # cautions: hardcoded, 이미지 크기에 따라 figsize 를 조정해야 할 수 있습니다
+    plt.subplots_adjust(top=0.8)               # cautions: hardcoded, 이미지 크기에 따라 top 를 조정해야 할 수 있습니다
     n_grid = np.ceil(n ** 0.5)
     tasks = ["mask", "gender", "age"]
     for idx, choice in enumerate(choices):
@@ -107,25 +112,42 @@ def train(data_dir, model_dir, args):
     dataset.set_transform(transform)
 
     # -- data_loader
-    train_set, val_set = dataset.split_dataset()
+    train_set, val = dataset.split_dataset()
+    val_set, test_set = train_test_split(val, test_size=0.5, shuffle=False, random_state=42)
 
     train_loader = DataLoader(
-        train_set,
+        dataset,
         batch_size=args.batch_size,
-        num_workers=multiprocessing.cpu_count()//2,
-        shuffle=True,
+        num_workers=multiprocessing.cpu_count() // 2,
+        # shuffle=True,
         pin_memory=use_cuda,
-        drop_last=True,
+        # drop_last=True,
+        sampler=weighted_sampler
     )
+
+    print(' ============ train loader length : ', len(train_loader))
 
     val_loader = DataLoader(
         val_set,
         batch_size=args.valid_batch_size,
-        num_workers=multiprocessing.cpu_count()//2,
+        num_workers=multiprocessing.cpu_count() // 2,
         shuffle=False,
         pin_memory=use_cuda,
-        drop_last=True,
+        # drop_last=True,
     )
+
+    print(' ============ val loader length : ', len(val_loader))
+
+    # test set for prediction and score
+    test_loader = DataLoader(
+        test_set,
+        batch_size=args.valid_batch_size,
+        num_workers=multiprocessing.cpu_count() // 2,
+        shuffle=False,
+        pin_memory=use_cuda,
+    )
+
+    print(' ============ test loader length : ', len(test_loader))
 
     # -- model
     model_module = getattr(import_module("model"), args.model)  # default: MyModel
@@ -133,8 +155,8 @@ def train(data_dir, model_dir, args):
         model_name='resnet18'
     ).to(device)
 
-    # model = torch.nn.DataParallel(model.model)
-    model = model.model
+    model = torch.nn.DataParallel(model.model)
+    # model = model.model
 
     # -- loss & metric
     criterion = create_criterion(args.criterion)  # default: cross_entropy
@@ -238,6 +260,11 @@ def train(data_dir, model_dir, args):
 
             val_loss = np.sum(val_loss_items) / len(val_loader)
             val_acc = np.sum(val_acc_items) / len(val_set)
+
+            if val_loss >= best_val_loss:
+                print(' --- Early Stopping ---')
+                break
+
             best_val_loss = min(best_val_loss, val_loss)
             if val_acc > best_val_acc:
                 print(f"New best model for val accuracy : {val_acc:4.2%}! saving the best model")
@@ -252,6 +279,9 @@ def train(data_dir, model_dir, args):
             logger.add_scalar("Val/accuracy", val_acc, epoch)
             logger.add_figure("results", figure, epoch)
             print()
+
+    # test prediction
+    test_prediction(model, test_loader)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -287,7 +317,7 @@ if __name__ == '__main__':
 
     data_dir = args.train_data_dir
     model_dir = args.model_dir
-    train(data_dir, model_dir, args)
+    # train(data_dir, model_dir, args)
 
     # inference
     data_dir = args.test_data_dir

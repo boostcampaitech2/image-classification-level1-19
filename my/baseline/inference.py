@@ -16,14 +16,13 @@ def load_model(saved_model, num_classes, device, args):
     model = model_cls(
         model_name='resnet18'
     )
-
-    model = model.model
+    model = torch.nn.DataParallel(model.model)
 
     # tarpath = os.path.join(saved_model, 'best.tar.gz')
     # tar = tarfile.open(tarpath, 'r:gz')
     # tar.extractall(path=saved_model)
 
-    model_path = os.path.join(saved_model, 'proc3/best.pth')
+    model_path = os.path.join(saved_model, 'proc14/best.pth')
     model.load_state_dict(torch.load(model_path, map_location=device))
 
     return model

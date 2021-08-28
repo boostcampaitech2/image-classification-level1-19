@@ -1,12 +1,11 @@
 import json
 import argparse
 import os
-from importlib import import_module
-
 import numpy as np
 import pandas as pd
-from sklearn.metrics import classification_report
 
+from importlib import import_module
+from sklearn.metrics import classification_report
 
 def evaluation(gt_dir, pred_dir):
     """

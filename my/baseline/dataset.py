@@ -27,8 +27,8 @@ def is_image_file(filename):
 class BaseAugmentation:
     def __init__(self, resize, mean, std, **args):
         self.transform = transforms.Compose([
-            Resize(resize, Image.BILINEAR),
-            CenterCrop(224),
+            # Resize(resize, Image.BILINEAR),
+            # CenterCrop(224),
             ToTensor(),
             Normalize(mean=mean, std=std),
         ])
@@ -285,8 +285,8 @@ class TestDataset(Dataset):
     def __init__(self, img_paths, resize, mean=(0.548, 0.504, 0.479), std=(0.237, 0.247, 0.246)):
         self.img_paths = img_paths
         self.transform = transforms.Compose([
-            Resize(resize, Image.BILINEAR),
-            CenterCrop(224),
+            # Resize(resize, Image.BILINEAR),
+            # CenterCrop(224),
             ToTensor(),
             Normalize(mean=mean, std=std),
         ])
