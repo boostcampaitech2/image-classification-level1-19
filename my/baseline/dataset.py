@@ -18,6 +18,35 @@ IMG_EXTENSIONS = [
     ".PNG", ".ppm", ".PPM", ".bmp", ".BMP",
 ]
 
+def get_transforms(need=('train', 'val'), img_size=(512, 384), mean=(0.548, 0.504, 0.479), std=(0.237, 0.247, 0.246)):
+    """
+    Albumentation
+
+    Args:
+        need: 'train' or 'val'
+    Returns:
+        transformations: transformations['train'] or transformations['val']
+    """
+    transformations = {}
+    if 'train' in need:
+        transformations['train'] = Compose([
+            Resize(img_size[0], img_size[1], p=1.0),
+            HorizontalFlip(p=0.5),
+            ShiftScaleRotate(p=0.5),
+            HueSaturationValue(hue_shift_limit=0.2, sat_shift_limit=0.2, val_shift_limit=0.2, p=0.5),
+            RandomBrightnessContrast(brightness_limit=(-0.1, 0.1), contrast_limit=(-0.1, 0.1), p=0.5),
+            GaussNoise(p=0.5),
+            Normalize(mean=mean, std=std, max_pixel_value=255.0, p=1.0),
+            ToTensorV2(p=1.0),
+        ], p=1.0)
+    if 'val' in need:
+        transformations['val'] = Compose([
+            Resize(img_size[0], img_size[1]),
+            Normalize(mean=mean, std=std, max_pixel_value=255.0, p=1.0),
+            ToTensorV2(p=1.0),
+        ], p=1.0)
+    return transformations
+
 def is_image_file(filename):
     return any(filename.endswith(extension) for extension in IMG_EXTENSIONS)
 
@@ -25,13 +54,17 @@ def is_image_file(filename):
 # Default Aug
 # ============================================
 class BaseAugmentation:
-    def __init__(self, resize, mean, std, **args):
+    def __init__(self, resize, mean, std, crop, **args):
+        # basic transform
         self.transform = transforms.Compose([
             # Resize(resize, Image.BILINEAR),
-            # CenterCrop(224),
+            CenterCrop(crop),
             ToTensor(),
             Normalize(mean=mean, std=std),
         ])
+
+        # albumentation
+        # self.transform = get_transforms('tr')
 
     def __call__(self, image):
         return self.transform(image)
@@ -123,15 +156,24 @@ class MaskBaseDataset(Dataset):
     gender_labels = []
     age_labels = []
 
-    def __init__(self, data_dir, mean=(0.548, 0.504, 0.479), std=(0.237, 0.247, 0.246), val_ratio=0.2):
+    def __init__(self, data_dir, mean=(0.548, 0.504, 0.479), std=(0.237, 0.247, 0.246), val_ratio=0.2, task_type='all', age_flag=False):
         self.data_dir = data_dir
         self.mean = mean
         self.std = std
         self.val_ratio = val_ratio
+        self.task_type = task_type
+        self.age_flag = age_flag
 
         self.transform = None
         self.setup()
         self.calc_statistics()
+
+        if self.task_type == 'all':
+            self.num_classes = 18
+        elif self.task_type == 'age' or self.task_type == 'mask':
+            self.num_classes = 3
+        elif self.task_type == 'gender':
+            self.num_classes = 2
 
     def setup(self):
         profiles = os.listdir(self.data_dir)
@@ -140,22 +182,45 @@ class MaskBaseDataset(Dataset):
                 continue
 
             img_folder = os.path.join(self.data_dir, profile)
-            for file_name in os.listdir(img_folder):
-                _file_name, ext = os.path.splitext(file_name)
-                if _file_name not in self._file_names:
-                    continue
 
-                img_path = os.path.join(self.data_dir, profile, file_name)  # (resized_data, 000004_male_Asian_54, mask1.jpg)
-                mask_label = self._file_names[_file_name]
+            if not self.age_flag:
+                for file_name in os.listdir(img_folder):
+                    _file_name, ext = os.path.splitext(file_name)
+                    if _file_name not in self._file_names:
+                        continue
 
-                id, gender, race, age = profile.split("_")
-                gender_label = GenderLabels.from_str(gender)
-                age_label = AgeLabels.from_number(age)
+                    img_path = os.path.join(self.data_dir, profile, file_name)  # (resized_data, 000004_male_Asian_54, mask1.jpg)
+                    mask_label = self._file_names[_file_name]
 
-                self.image_paths.append(img_path)
-                self.mask_labels.append(mask_label)
-                self.gender_labels.append(gender_label)
-                self.age_labels.append(age_label)
+                    id, gender, race, age = profile.split("_")
+                    gender_label = GenderLabels.from_str(gender)
+                    age_label = AgeLabels.from_number(age)
+
+                    self.image_paths.append(img_path)
+                    self.mask_labels.append(mask_label)
+                    self.gender_labels.append(gender_label)
+                    self.age_labels.append(age_label)
+
+            # only age >= 60 dataset
+            else:
+                for file_name in os.listdir(img_folder):
+                    _file_name, ext = os.path.splitext(file_name)
+                    if _file_name not in self._file_names:
+                        continue
+
+                    img_path = os.path.join(self.data_dir, profile, file_name)  # (resized_data, 000004_male_Asian_54, mask1.jpg)
+                    mask_label = self._file_names[_file_name]
+
+                    id, gender, race, age = profile.split("_")
+                    gender_label = GenderLabels.from_str(gender)
+                    age_label = AgeLabels.from_number(age)
+
+                    if age_label == 2:
+                        for i in range(2):
+                            self.image_paths.append(img_path)
+                            self.mask_labels.append(mask_label)
+                            self.gender_labels.append(gender_label)
+                            self.age_labels.append(age_label)
 
     def calc_statistics(self):
         has_statistics = self.mean is not None and self.std is not None
@@ -171,20 +236,50 @@ class MaskBaseDataset(Dataset):
             self.mean = np.mean(sums, axis=0) / 255
             self.std = (np.mean(squared, axis=0) - self.mean ** 2) ** 0.5 / 255
 
-    def set_transform(self, transform):
-        self.transform = transform
+            print('========= mean of dataset : ', self.mean)
+            print('========= std of dataset : ', self.std)
+
+    def set_transform(self, transform, age_flag):
+        if age_flag:
+            self.transform = transforms.Compose([
+                # transforms.Resize((224, 224)),
+                transforms.CenterCrop((250, 200)),
+                transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+                transforms.RandomRotation(5),
+                transforms.RandomAffine(degrees=11, translate=(0.1, 0.1), scale=(0.8, 0.8)),
+                transforms.ToTensor(),
+                transforms.Normalize((0.4124234616756439, 0.3674212694168091, 0.2578217089176178),
+                                     (0.3268945515155792, 0.29282665252685547, 0.29053378105163574))
+            ])
+        else:
+            self.transform = transform
 
     def __getitem__(self, index):
         assert self.transform is not None, "[Warning] --- You Must Set Transform ---"
 
         image = self.read_image(index)
+
+        # each task label
         mask_label = self.get_mask_label(index)
         gender_label = self.get_gender_label(index)
         age_label = self.get_age_label(index)
+
+        # multi class label
         multi_class_label = self.encode_multi_class(mask_label, gender_label, age_label)
 
+        # image transform
         image_transform = self.transform(image)
-        return image_transform, multi_class_label
+
+        # return multi vs each task
+        if self.task_type == 'all':
+            return image_transform, multi_class_label
+        elif self.task_type == 'age':
+            return image_transform, age_label
+        elif self.task_type == 'mask':
+            return image_transform, mask_label
+        elif self.task_type == 'gender':
+            return image_transform, gender_label
+
 
     def __len__(self):
         return len(self.image_paths)
@@ -286,7 +381,7 @@ class TestDataset(Dataset):
         self.img_paths = img_paths
         self.transform = transforms.Compose([
             # Resize(resize, Image.BILINEAR),
-            # CenterCrop(224),
+            CenterCrop((250, 200)),
             ToTensor(),
             Normalize(mean=mean, std=std),
         ])
@@ -300,3 +395,39 @@ class TestDataset(Dataset):
 
     def __len__(self):
         return len(self.img_paths)
+
+
+# custom dataset for undersampling
+class CustomDataset(Dataset):
+    '''
+    CustomDataset for applying different transform on train / val
+
+    Args:
+         data_df: A data frame from train.csv
+    '''
+
+    class_labels = []
+    image_images = []
+
+    def __init__(self, data_df, transform=None):
+        self.mean = mean
+        self.std = std
+        self.transform = transform
+        self.df = data_df
+        self.setup()
+
+    def setup(self):
+        for index in tqdm.tqdm(range(self.__len__())):
+            df_series = self.df.iloc[index]
+            img_path = df_series[df_idx["path"]]
+            if os.path.exists(img_path):
+                self.image_images.append(self.transform(image=np.array(Image.open(img_path)))['image'])
+                self.class_labels.append(df_series[df_idx["label"]])
+
+    def __getitem__(self, index):
+        image = self.image_images[index]
+        class_label = self.class_labels[index]
+        return image, class_label
+
+    def __len__(self):
+        return len(self.df)

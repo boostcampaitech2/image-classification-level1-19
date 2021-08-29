@@ -7,21 +7,23 @@ import random
 import re
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import torch
 import torch.utils.data.sampler as sampler
 import torchvision.transforms as transforms
 
+from torchsummary import summary
 from new.new_dataset import MaskDataset
 from importlib import import_module
 from pathlib import Path
 from dataset import MaskBaseDataset
-from inference import inference
+from inference import inference, inference_combine
 from loss import create_criterion
 from sklearn.model_selection import *
 from torch.optim.lr_scheduler import StepLR
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, ConcatDataset
 from torch.utils.tensorboard import SummaryWriter
-from utils import test_prediction
+from utils import test_prediction, init_fc_params, init_freezing
 
 
 def seed_everything(seed):
@@ -85,6 +87,40 @@ def increment_path(path, exist_ok=False):
         n = max(i) + 1 if i else 2
         return f"{path}{n}"
 
+def undersampling_df(df:pd.DataFrame):
+    drop_list = []
+    for drop_idx in df.index:
+        if df.loc[drop_idx]['label'] == 0:
+            if np.random.randint(6) != 0:
+                drop_list.append(drop_idx)
+        elif df.loc[drop_idx]['label'] == 1:
+            if np.random.randint(5) != 0:
+                drop_list.append(drop_idx)
+        elif df.loc[drop_idx]['label'] == 3:
+            if np.random.randint(9) != 0:
+                drop_list.append(drop_idx)
+        elif df.loc[drop_idx]['label'] == 4:
+            if np.random.randint(10) != 0:
+                drop_list.append(drop_idx)
+        elif df.loc[drop_idx]['label'] in [9, 10, 12, 15, 16]:
+            if np.random.randint(2) != 0:
+                drop_list.append(drop_idx)
+    return drop_list
+
+def train_by_df():
+    data_dir = '/opt/ml/input/data/train'
+    img_dir = f'{data_dir}/images'
+    df_path = f'{data_dir}/new_train.csv'
+    df = pd.read_csv(df_path, delimiter=',', encoding='utf-8-sig')
+
+    drop_list = undersampling_df(df)
+    drop_df = df.drop(drop_list)
+
+    train_df, val_df = train_test_split(drop_df, test_size=0.2, shuffle=True, random_state=42)
+
+
+    # ============================= undersampling
+
 
 def train(data_dir, model_dir, args):
     seed_everything(args.seed)
@@ -95,11 +131,24 @@ def train(data_dir, model_dir, args):
     device = torch.device("cuda" if use_cuda else "cpu")
 
     # -- dataset
-    dataset_module = getattr(import_module("dataset"), args.dataset)  # default: MaskSplitByProfileDataset
+    dataset_module = getattr(import_module("dataset"), args.dataset)  # default: MaskBaseDataset
     dataset = dataset_module(
         data_dir=data_dir,
+        val_ratio=args.val_ratio,
+        task_type=args.task_type
     )
+
+    # --- elderly dataset
+    dataset_module = getattr(import_module("dataset"), args.dataset)  # default: MaskBaseDataset
+    elderly_dataset = dataset_module(
+        data_dir=data_dir,
+        val_ratio=args.val_ratio,
+        task_type=args.task_type,
+        age_flag=args.age_flag
+    )
+
     num_classes = dataset.num_classes  # 18
+    print(' ============ num_classes : ', num_classes)
 
     # -- augmentation
     transform_module = getattr(import_module("dataset"), args.augmentation)  # default: BaseAugmentation
@@ -107,22 +156,28 @@ def train(data_dir, model_dir, args):
         resize=args.resize,
         mean=dataset.mean,
         std=dataset.std,
+        crop=(args.img_height, args.img_width)
     )
 
-    dataset.set_transform(transform)
+    # -- set transform
+    dataset.set_transform(transform, False)
+    elderly_dataset.set_transform(transform, True)
 
     # -- data_loader
     train_set, val = dataset.split_dataset()
-    val_set, test_set = train_test_split(val, test_size=0.5, shuffle=False, random_state=42)
+    val_set, test_set = train_test_split(val, test_size=0.5, shuffle=True, random_state=42)
+
+    # -- concat train dataset
+    train_set = ConcatDataset([train_set, elderly_dataset])
 
     train_loader = DataLoader(
-        dataset,
+        train_set,
         batch_size=args.batch_size,
         num_workers=multiprocessing.cpu_count() // 2,
-        # shuffle=True,
+        shuffle=True,
         pin_memory=use_cuda,
         # drop_last=True,
-        sampler=weighted_sampler
+        # sampler=weighted_sampler
     )
 
     print(' ============ train loader length : ', len(train_loader))
@@ -152,10 +207,21 @@ def train(data_dir, model_dir, args):
     # -- model
     model_module = getattr(import_module("model"), args.model)  # default: MyModel
     model = model_module(
-        model_name='resnet18'
+        model_name=args.model_name
     ).to(device)
 
-    model = torch.nn.DataParallel(model.model)
+    model = model.model
+
+    # --- init params
+    init_fc_params(model)
+
+    # --- freezing strategy
+    # init_freezing(model)
+
+    # --- model summary
+    summary(model, (3, args.img_height, args.img_width))
+
+    model = torch.nn.DataParallel(model)
     # model = model.model
 
     # -- loss & metric
@@ -191,6 +257,10 @@ def train(data_dir, model_dir, args):
     best_val_acc = 0
     best_val_loss = np.inf
     for epoch in range(args.epochs):
+
+        # if epoch <= 3:
+        #     model.
+
         # train loop
         model.train()
         loss_value = 0
@@ -261,7 +331,7 @@ def train(data_dir, model_dir, args):
             val_loss = np.sum(val_loss_items) / len(val_loader)
             val_acc = np.sum(val_acc_items) / len(val_set)
 
-            if val_loss >= best_val_loss:
+            if args.early_stopping and val_loss >= best_val_loss:
                 print(' --- Early Stopping ---')
                 break
 
@@ -281,7 +351,7 @@ def train(data_dir, model_dir, args):
             print()
 
     # test prediction
-    test_prediction(model, test_loader)
+    test_prediction(model, test_loader, num_classes=num_classes)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -299,6 +369,15 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size', type=int, default=64, help='input batch size for training (default: 64)')
     parser.add_argument('--valid_batch_size', type=int, default=64, help='input batch size for validing (default: 1000)')
     parser.add_argument('--model', type=str, default='MyModel', help='model type (default: MyModel)')
+
+    # -- add custom args
+    parser.add_argument('--model_name', type=str, default='resnet18', help='model detail type (default: resnet18)')
+    parser.add_argument('--early_stopping', type=int, default=1, help='early stopping flag (default: True)')
+    parser.add_argument('--img_width', type=int, default=200, help='image width to resize (default: 200)')
+    parser.add_argument('--img_height', type=int, default=250, help='image height to resize (default: 250)')
+    parser.add_argument('--task_type', type=str, default='all', help='task type whether is all or not (default: all)')
+    parser.add_argument('--age_flag', type=int, default=0, help='selection of age >= 60 (default: False)')
+
     parser.add_argument('--optimizer', type=str, default='SGD', help='optimizer type (default: SGD)')
     parser.add_argument('--lr', type=float, default=1e-3, help='learning rate (default: 1e-3)')
     parser.add_argument('--val_ratio', type=float, default=0.2, help='ratio for validaton (default: 0.2)')
@@ -322,4 +401,6 @@ if __name__ == '__main__':
     # inference
     data_dir = args.test_data_dir
     output_dir = '/opt/ml/input/data/eval/submission'
-    inference(data_dir, model_dir, output_dir, args)
+
+    # inference(data_dir, model_dir, output_dir, args)
+    inference_combine(output_dir, args)

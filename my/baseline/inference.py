@@ -3,6 +3,7 @@ import os
 import pandas as pd
 import torch
 
+from utils import get_ans
 from torch.utils.data import DataLoader
 from importlib import import_module
 from dataset import TestDataset, MaskBaseDataset
@@ -14,7 +15,7 @@ def load_model(saved_model, num_classes, device, args):
     # 학습 시, 모델명 변경 주의
     # ==============================
     model = model_cls(
-        model_name='resnet18'
+        model_name=args.model_name
     )
     model = torch.nn.DataParallel(model.model)
 
@@ -22,7 +23,7 @@ def load_model(saved_model, num_classes, device, args):
     # tar = tarfile.open(tarpath, 'r:gz')
     # tar.extractall(path=saved_model)
 
-    model_path = os.path.join(saved_model, 'proc14/best.pth')
+    model_path = os.path.join(saved_model, 'proc35/best.pth')
     model.load_state_dict(torch.load(model_path, map_location=device))
 
     return model
@@ -62,9 +63,27 @@ def inference(data_dir, model_dir, output_dir, args):
             preds.extend(pred.cpu().numpy())
 
     info['ans'] = preds
-    info.to_csv(os.path.join(output_dir, f'output.csv'), index=False)
-    print(f'Inference Done!')
+    info.to_csv(os.path.join(output_dir, f'output_{args.model_name}_{args.task_type}.csv'), index=False)
+    print(f' --- {args.task_type} Inference Done --- ')
 
+
+# labeling for all task => age / mask / gender to one
+def inference_combine(output_dir, args):
+    gender_df = pd.read_csv(os.path.join(output_dir, f'output_{args.model_name}_gender.csv'), delimiter=',', encoding='utf-8-sig')
+    mask_df = pd.read_csv(os.path.join(output_dir, f'output_{args.model_name}_mask.csv'), delimiter=',', encoding='utf-8-sig')
+    age_df = pd.read_csv(os.path.join(output_dir, f'output_{args.model_name}_age.csv'), delimiter=',', encoding='utf-8-sig')
+
+    gender_list = gender_df['ans'].tolist()
+    mask_list = mask_df['ans'].tolist()
+    age_list = age_df['ans'].tolist()
+
+    ans = []
+    for i in range(len(gender_list)):
+        ans.append(get_ans(mask_list[i], gender_list[i], age_list[i]))
+
+    gender_df['final_ans'] = ans
+    gender_df.to_csv(os.path.join(output_dir, f'output_{args.model_name}_final.csv'), index=False)
+    print(' --- Inference Combine Done --- ')
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -88,3 +107,4 @@ if __name__ == '__main__':
     os.makedirs(output_dir, exist_ok=True)
 
     inference(data_dir, model_dir, output_dir, args)
+    inference_combine(output_dir, args)

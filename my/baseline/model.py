@@ -3,6 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision
 
+from efficientnet_pytorch import EfficientNet
+
 class BaseModel(nn.Module):
     def __init__(self, num_classes):
         super().__init__()
@@ -58,6 +60,10 @@ class MyModel(nn.Module):
                 self.model = self.get_googlenet()
             elif self.model_name == 'densenet121':
                 self.model = self.get_densenet121()
+            elif self.model_name == 'efficientnetb2':
+                self.model = self.get_efficientnetb2()
+            elif self.model_name == 'efficientnetb4':
+                self.model = self.get_efficientnetb4()
             else:
                 raise ValueError('(Model Not Found) Try Another Model')
         except ValueError as err_msg:
@@ -70,7 +76,13 @@ class MyModel(nn.Module):
 
     def get_resnet18(self):
         resnet18 = torchvision.models.resnet18(pretrained=self.pretrained)
-        resnet18.fc = nn.Linear(in_features=resnet18.fc.in_features, out_features=self.num_classes, bias=True)
+        # resnet18.layer1.add_module(name='dropout', module=nn.Dropout2d(p=0.5))
+        # resnet18.layer2.add_module(name='dropout', module=nn.Dropout2d(p=0.5))
+
+        resnet18.fc = nn.Sequential(
+            nn.Dropout2d(p=0.5),
+            nn.Linear(in_features=resnet18.fc.in_features, out_features=self.num_classes, bias=True)
+        )
         return resnet18
 
     def get_resnet50(self):
@@ -92,6 +104,14 @@ class MyModel(nn.Module):
         googlenet = torchvision.models.googlenet(pretrained=self.pretrained)
         googlenet.fc = nn.Linear(in_features=googlenet.fc.in_features, out_features=self.num_classes, bias=True)
         return googlenet
+
+    def get_efficientnetb2(self):
+        efficientnetb2 = EfficientNet.from_pretrained('efficientnet-b2', num_classes=18)
+        return efficientnetb2
+
+    def get_efficientnetb4(self):
+        efficientnetb4 = EfficientNet.from_pretrained('efficientnet-b4', num_classes=18)
+        return efficientnetb4
 
     def get_densenet121(self):
         densenet121 = torchvision.models.densenet121(pretrained=self.pretrained)
