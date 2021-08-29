@@ -25,8 +25,8 @@ class Trainer:
         self.test_data_loader = test_data_loader
         self.LEARNING_RATE = LEARNING_RATE
         self.scheduler = scheduler
-        if not scheduler:  
-            self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer,'min')
+#         if not scheduler:  
+#             self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer,'min')
 
 
        
@@ -86,7 +86,7 @@ class Trainer:
                         loss.backward() # 모델의 예측 값과 실제 값의 CrossEntropy 차이를 통해 gradient 계산
                         self.optimizer.step() # 계산된 gradient를 가지고 모델 업데이트
                     if phase == 'test':
-                        self.scheduler.step(loss) 
+                        #self.scheduler.step(loss) # scheduler 작동
                         prediction.extend(preds.cpu().numpy()) # 그래프 뽑을 때 필요한  prediction
                         
                     running_loss += loss.item() * images.size(0) # 한 Batch에서의 loss 값 저장
@@ -151,7 +151,33 @@ class Trainer:
         file_oldname = os.path.join(MODEL_PATH, f"resnet18_model_{self.LEARNING_RATE}_best.pt")
         os.rename(file_oldname, file_newname_newfile)
         print(f"최고 accuracy : {best_test_accuracy}, 최고 낮은 loss : {best_test_loss}, 최고 높은 f1 : {best_test_f1}")
-
+        #################### 슬랙에 메세지 남기기 ####################
+        url = 'https://hooks.slack.com/services/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'# 웹후크 URL 입력
+        message = file_newname_newfile # 메세지 입력
+        title = (f"Best Model") # 타이틀 입력
+        slack_data = {
+            "username": "NotificationBot", # 보내는 사람 이름
+            "icon_emoji": ":satellite:",
+            #"channel" : "#somerandomcahnnel",
+            "attachments": [
+                {
+                    "color": "#9733EE",
+                    "fields": [
+                        {
+                            "title": title,
+                            "value": message,
+                            "short": "false",
+                        }
+                    ]
+                }
+            ]
+        }
+        byte_length = str(sys.getsizeof(slack_data))
+        headers = {'Content-Type': "application/json", 'Content-Length': byte_length}
+        response = requests.post(url, data=json.dumps(slack_data), headers=headers)
+        if response.status_code != 200:
+            raise Exception(response.status_code, response.text)
+         #############################################################
     def _progress(self, batch_idx):
         base = '[{}/{} ({:.0f}%)]'
         if hasattr(self.data_loader, 'n_samples'):

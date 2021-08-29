@@ -33,14 +33,14 @@ def main():
 
     # build optimizer, learning rate scheduler. delete every lines containing lr_scheduler for disabling scheduler
     # optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE) # weight 업데이트를 위한 optimizer를 Adam으로 사용함
-    LEARNING_RATE = 0.0001
+    LEARNING_RATE = 0.0005
     optimizer = torch.optim.SGD(model.parameters(), lr=LEARNING_RATE, momentum=0.9)
     
     scheduler =  optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min')
 
     trainer = Trainer(model, criterion, optimizer, device,
                  data_loader, LEARNING_RATE, test_data_loader, scheduler)
-    trainer.train(NUM_EPOCH=10)
+    trainer.train(NUM_EPOCH=30)
 
 
 if __name__ == '__main__':

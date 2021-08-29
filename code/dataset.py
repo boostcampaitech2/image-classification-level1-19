@@ -3,6 +3,7 @@ import pandas as pd
 from PIL import Image
 from torch.utils.data import Dataset
 import warnings
+import numpy as np
 warnings.filterwarnings('ignore')
 
 
@@ -14,24 +15,26 @@ class MaskDataset(Dataset):
     
     def __init__(self, data_path,idx,transform=None):
         self.main_path = data_path
-        self.df_csv = pd.read_csv(data_path+'train.csv').iloc[idx]
+        self.df_csv = pd.read_csv(data_path+'train2.csv').iloc[idx]
         self.df_csv['gender'] = self.df_csv['gender'].map({'male':0, 'female':1})
         self.transform = transform  
         self.length = self.__len__()
         
         
     def __getitem__(self, index):
-
+            
             main_index, sub_index = index//7, index%7
+            #middle_path = 'new_imgs'
             sub_path = self.df_csv.iloc[main_index]['path']
-            file_path = os.path.join(self.main_path, 'images', sub_path)
+            #file_path = os.path.join(self.main_path, middle_path, sub_path) ## 폴더 바꾸기 1. images / 2. new_imgs
+            file_path = sub_path
             files = [file_name for file_name in os.listdir(file_path) if file_name[0] != '.']
-            image = Image.open(os.path.join(file_path, files[sub_index]))
+            image = Image.open(os.path.join(file_path, files[sub_index])).convert('RGB')
             label = self.data_classification(self.mask_classification(files[sub_index]), 
                                 self.df_csv.iloc[main_index]['gender'],self.age(self.df_csv.iloc[main_index]['age'])) 
 
             if self.transform:
-                image = self.transform(image)
+                image = self.transform(image=np.array(image))['image']
 
 
 
