@@ -300,9 +300,11 @@ class MaskBaseDataset(Dataset):
 # Dataset based on people
 class MaskSplitByProfileDataset(MaskBaseDataset):
 
-    def __init__(self, data_dir, mean=(0.548, 0.504, 0.479), std=(0.237, 0.247, 0.246), val_ratio=0.2):
+    def __init__(self, data_dir, mean=(0.548, 0.504, 0.479), std=(0.237, 0.247, 0.246), val_ratio=0.2, task_type='all', age_flag=0):
         self.indices = defaultdict(list)
-        super().__init__(data_dir, mean, std, val_ratio)
+        self.task_type = task_type
+        self.age_flag = age_flag
+        super().__init__(data_dir, mean, std, val_ratio, self.task_type, self.age_flag)
 
     @staticmethod
     def _split_profile(profiles, val_ratio):
@@ -346,9 +348,20 @@ class MaskSplitByProfileDataset(MaskBaseDataset):
                     self.indices[phase].append(cnt)
                     cnt += 1
 
-    def split_dataset(self) -> List[Subset]:
+    def split_dataset(self, aug_flag=False) -> List[Subset]:
+        if aug_flag:
+            self.val_ratio = 0.5
+            self.clear_all()
+            self.setup()
         return [Subset(self, indices) for phase, indices in self.indices.items()]
 
+    # -- clear all list to transformed dataset
+    def clear_all(self):
+        self.image_paths.clear()
+        self.mask_labels.clear()
+        self.gender_labels.clear()
+        self.age_labels.clear()
+        self.indices = defaultdict(list)
 
 class TestDataset(Dataset):
     def __init__(self, img_paths, resize, mean=(0.548, 0.504, 0.479), std=(0.237, 0.247, 0.246)):
