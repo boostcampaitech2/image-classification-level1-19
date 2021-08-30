@@ -80,7 +80,7 @@ class MyModel(nn.Module):
         # resnet18.layer2.add_module(name='dropout', module=nn.Dropout2d(p=0.5))
 
         resnet18.fc = nn.Sequential(
-            nn.Dropout2d(p=0.5),
+            nn.Dropout2d(p=0.2),
             nn.Linear(in_features=resnet18.fc.in_features, out_features=self.num_classes, bias=True)
         )
         return resnet18

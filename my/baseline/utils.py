@@ -3,6 +3,7 @@ import torch
 import pandas as pd
 import torch.nn as nn
 import numpy as np
+import torchvision.transforms as transforms
 
 from sklearn.metrics import confusion_matrix, f1_score, accuracy_score, recall_score, precision_score, classification_report
 from mlxtend.plotting import plot_confusion_matrix
@@ -63,16 +64,6 @@ def plot_cm(cm):
     plt.ylabel('True Label', fontsize=18)
     plt.show()
 
-# def plot_confusion_matrix(cm):
-#     classes = [i for i in range(18)]
-#     plt.figure()
-#     plot_confusion_matrix(cm, figsize=(12, 8), cmap=plt.cm.Blues)
-#     plt.xticks(18, classes, fontsize=16)
-#     plt.yticks(18, classes, fontsize=16)
-#     plt.xlabel('Predicted Label', fontsize=18)
-#     plt.ylabel('True Label', fontsize=18)
-#     plt.show()
-
 def df_classification_report(y_true, y_pred, num_classes=18):
     classes = [i for i in range(num_classes)]
     report = classification_report(y_true, y_pred, output_dict=True, target_names=classes)
@@ -97,6 +88,21 @@ def init_freezing(model, child_num=6):
         if ct < child_num:
             for param in child.parameters():
                 param.requires_grad = False
+
+def add_hparams_to_tensorboard(save_dir):
+    config_list = [
+        'seed', 'epochs', 'dataset', 'augmentation', 'batch_size',
+        'optimizer', 'lr', 'val_ratio', 'criterion', 'lr_decay_step'
+    ]
+
+    final_config = dict()
+    config = json.load(open(os.path.join(save_dir, 'config.json')))
+    for k, v in config.items():
+        if k in config_list:
+            final_config[k] = v
+
+    with SummaryWriter() as w:
+        w.add_hparams(final_config, {'hparam/accuracy': 0, 'hparam/loss': 0})
 
 # labeling for all task
 def get_ans(mask, gender, age):
@@ -139,3 +145,52 @@ def get_ans(mask, gender, age):
             return 16
         if gender == 1 and age == 2:
             return 17
+
+# get train dataset transform => lots of transform
+def get_train_transform(mean, std, args):
+    return transforms.Compose([
+        transforms.RandomResizedCrop((args.img_height, args.img_width), scale=(0.5, 1.0)),
+        transforms.RandomHorizontalFlip(),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=mean, std=std)
+    ])
+
+# get valid transform => at least transform
+def get_valid_transform(mean, std, args):
+    return transforms.Compose([
+        transforms.CenterCrop((args.img_height, args.img_width)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=mean, std=std)
+    ])
+
+# def undersampling_df(df:pd.DataFrame):
+#     drop_list = []
+#     for drop_idx in df.index:
+#         if df.loc[drop_idx]['label'] == 0:
+#             if np.random.randint(6) != 0:
+#                 drop_list.append(drop_idx)
+#         elif df.loc[drop_idx]['label'] == 1:
+#             if np.random.randint(5) != 0:
+#                 drop_list.append(drop_idx)
+#         elif df.loc[drop_idx]['label'] == 3:
+#             if np.random.randint(9) != 0:
+#                 drop_list.append(drop_idx)
+#         elif df.loc[drop_idx]['label'] == 4:
+#             if np.random.randint(10) != 0:
+#                 drop_list.append(drop_idx)
+#         elif df.loc[drop_idx]['label'] in [9, 10, 12, 15, 16]:
+#             if np.random.randint(2) != 0:
+#                 drop_list.append(drop_idx)
+#     return drop_list
+
+# def train_by_df():
+#     data_dir = '/opt/ml/input/data/train'
+#     img_dir = f'{data_dir}/images'
+#     df_path = f'{data_dir}/new_train.csv'
+#     df = pd.read_csv(df_path, delimiter=',', encoding='utf-8-sig')
+#
+#     drop_list = undersampling_df(df)
+#     drop_df = df.drop(drop_list)
+#
+#     train_df, val_df = train_test_split(drop_df, test_size=0.2, shuffle=True, random_state=42)

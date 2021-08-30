@@ -18,35 +18,6 @@ IMG_EXTENSIONS = [
     ".PNG", ".ppm", ".PPM", ".bmp", ".BMP",
 ]
 
-def get_transforms(need=('train', 'val'), img_size=(512, 384), mean=(0.548, 0.504, 0.479), std=(0.237, 0.247, 0.246)):
-    """
-    Albumentation
-
-    Args:
-        need: 'train' or 'val'
-    Returns:
-        transformations: transformations['train'] or transformations['val']
-    """
-    transformations = {}
-    if 'train' in need:
-        transformations['train'] = Compose([
-            Resize(img_size[0], img_size[1], p=1.0),
-            HorizontalFlip(p=0.5),
-            ShiftScaleRotate(p=0.5),
-            HueSaturationValue(hue_shift_limit=0.2, sat_shift_limit=0.2, val_shift_limit=0.2, p=0.5),
-            RandomBrightnessContrast(brightness_limit=(-0.1, 0.1), contrast_limit=(-0.1, 0.1), p=0.5),
-            GaussNoise(p=0.5),
-            Normalize(mean=mean, std=std, max_pixel_value=255.0, p=1.0),
-            ToTensorV2(p=1.0),
-        ], p=1.0)
-    if 'val' in need:
-        transformations['val'] = Compose([
-            Resize(img_size[0], img_size[1]),
-            Normalize(mean=mean, std=std, max_pixel_value=255.0, p=1.0),
-            ToTensorV2(p=1.0),
-        ], p=1.0)
-    return transformations
-
 def is_image_file(filename):
     return any(filename.endswith(extension) for extension in IMG_EXTENSIONS)
 
@@ -151,18 +122,18 @@ class MaskBaseDataset(Dataset):
         "normal": MaskLabels.NORMAL
     }
 
-    image_paths = []
-    mask_labels = []
-    gender_labels = []
-    age_labels = []
-
-    def __init__(self, data_dir, mean=(0.548, 0.504, 0.479), std=(0.237, 0.247, 0.246), val_ratio=0.2, task_type='all', age_flag=False):
+    def __init__(self, data_dir, mean=(0.548, 0.504, 0.479), std=(0.237, 0.247, 0.246), val_ratio=0.2, task_type='all', age_flag=0):
         self.data_dir = data_dir
         self.mean = mean
         self.std = std
         self.val_ratio = val_ratio
         self.task_type = task_type
         self.age_flag = age_flag
+
+        self.image_paths = []
+        self.mask_labels = []
+        self.gender_labels = []
+        self.age_labels = []
 
         self.transform = None
         self.setup()
@@ -216,7 +187,7 @@ class MaskBaseDataset(Dataset):
                     age_label = AgeLabels.from_number(age)
 
                     if age_label == 2:
-                        for i in range(2):
+                        for i in range(4):
                             self.image_paths.append(img_path)
                             self.mask_labels.append(mask_label)
                             self.gender_labels.append(gender_label)
@@ -317,7 +288,10 @@ class MaskBaseDataset(Dataset):
         img_cp = np.clip(img_cp, 0, 255).astype(np.uint8)
         return img_cp
 
-    def split_dataset(self) -> Tuple[Subset, Subset]:
+    def split_dataset(self, aug_flag=False) -> Tuple[Subset, Subset]:
+        # -- transformed dataset
+        if aug_flag:
+            self.val_ratio = 0.5
         n_val = int(len(self) * self.val_ratio)
         n_train = len(self) - n_val
         train_set, val_set = random_split(self, [n_train, n_val])

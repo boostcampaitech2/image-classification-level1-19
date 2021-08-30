@@ -23,7 +23,7 @@ def load_model(saved_model, num_classes, device, args):
     # tar = tarfile.open(tarpath, 'r:gz')
     # tar.extractall(path=saved_model)
 
-    model_path = os.path.join(saved_model, 'proc35/best.pth')
+    model_path = os.path.join(saved_model, 'proc38/best.pth')
     model.load_state_dict(torch.load(model_path, map_location=device))
 
     return model
