@@ -1,0 +1,48 @@
+
+change AddGaussianNoise * 0.1
+python train.py --epochs 10 --dataset MaskSplitByProfileDataset --augmentation CustomAugmentation --batch_size 128 --model Resnet50 --optimizer Adam --name Resnet50
+                [Val] acc : 72.25%, loss: 0.58 || best acc : 73.92%, best loss: 0.49
+                
+change AddGaussianNoise * 0.5
+python train.py --epochs 10 --dataset MaskSplitByProfileDataset --augmentation CustomAugmentation --batch_size 128 --model Resnet50 --optimizer Adam --name Resnet50 
+                [Val] acc : 73.77%, loss: 0.57 || best acc : 74.15%, best loss: 0.53
+
+change lr = 0.01,  add HorizontalFlip
+python train.py --epochs 10 --dataset MaskSplitByProfileDataset --augmentation CustomAugmentation --batch_size 128 --lr 0.01 --model Resnet50 --optimizer Adam --name Resnet50 
+                [Val] acc : 61.01%, loss: 0.91 || best acc : 61.01%, best loss: 0.91
+
+increase epochs to 20  change AddGaussianNoise * 0.3
+python train.py --epochs 20 --dataset MaskSplitByProfileDataset --augmentation CustomAugmentation --batch_size 128 --lr 0.01 --model Resnet50 --optimizer Adam --name Resnet50/00                 
+                [Val] acc : 60.36%, loss: 0.93 || best acc : 64.26%, best loss: 0.81
+
+change lr = 0.005
+python train.py --epochs 20 --dataset MaskSplitByProfileDataset --augmentation CustomAugmentation --batch_size 128 --lr 0.005 --model Resnet50 --optimizer Adam --name Resnet50/01                
+                [Val] acc : 65.75%, loss: 0.72 || best acc : 70.02%, best loss: 0.62
+                
+change lr = 0.001
+python train.py --epochs 20 --dataset MaskSplitByProfileDataset --augmentation CustomAugmentation --batch_size 128 --lr 0.001 --model Resnet50 --optimizer Adam --name Resnet50/02               
+                [Val] acc : 72.54%, loss: 0.59 || best acc : 75.97%, best loss: 0.47
+    
+change AddGaussianNoise * 0.2    
+python train.py --epochs 20 --dataset MaskSplitByProfileDataset --augmentation CustomAugmentation --batch_size 128 --lr 0.001 --model Resnet50 --optimizer Adam --name Resnet50/03
+                [Val] acc : 76.20%, loss: 0.48 || best acc : 76.20%, best loss: 0.43
+
+change model = googlenet
+python train.py --epochs 20 --dataset MaskSplitByProfileDataset --augmentation CustomAugmentation --batch_size 128 --lr 0.001 --model Googlenet --optimizer Adam --name googlenet/00
+                [Val] acc : 73.04%, loss: 0.56 || best acc : 76.38%, best loss: 0.42
+                
+increase epochs to 40
+python train.py --epochs 40 --dataset MaskSplitByProfileDataset --augmentation CustomAugmentation --batch_size 128 --lr 0.001 --model Googlenet --optimizer Adam --name googlenet/01
+                [Val] acc : 75.59%, loss: 0.57 || best acc : 79.04%, best loss: 0.41
+                
+decrease epochs to 20  change lr_decay_step to 10
+python train.py --epochs 20 --dataset MaskSplitByProfileDataset --augmentation CustomAugmentation --batch_size 128 --lr 0.001 --model Googlenet --optimizer Adam --lr_decay_step 10 --name googlenet/02
+                [Val] acc : 77.78%, loss: 0.47 || best acc : 78.37%, best loss: 0.42
+      
+change AddGaussianNoise * 0.2
+python train.py --epochs 20 --dataset MaskSplitByProfileDataset --augmentation CustomAugmentation --batch_size 128 --lr 0.001 --model Googlenet --optimizer Adam --lr_decay_step 10 --name googlenet/03
+                [Val] acc : 77.52%, loss: 0.41 || best acc : 79.04%, best loss: 0.39
+                
+                
+                
+                

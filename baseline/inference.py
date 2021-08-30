@@ -19,7 +19,7 @@ def load_model(saved_model, num_classes, device):
     # tar = tarfile.open(tarpath, 'r:gz')
     # tar.extractall(path=saved_model)
 
-    model_path = os.path.join(saved_model, 'best.pth')
+    model_path = os.path.join(saved_model, 'last.pth')   #or best
     model.load_state_dict(torch.load(model_path, map_location=device))
 
     return model
@@ -45,7 +45,7 @@ def inference(data_dir, model_dir, output_dir, args):
     loader = torch.utils.data.DataLoader(
         dataset,
         batch_size=args.batch_size,
-        num_workers=8,
+        num_workers=4,
         shuffle=False,
         pin_memory=use_cuda,
         drop_last=False,

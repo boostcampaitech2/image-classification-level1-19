@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchvision.models as models
 
 
 class BaseModel(nn.Module):
@@ -34,20 +35,65 @@ class BaseModel(nn.Module):
         return self.fc(x)
 
 
-# Custom Model Template
-class MyModel(nn.Module):
-    def __init__(self, num_classes):
-        super().__init__()
+# Custom Model Template    
+class Vgg19(nn.Module) :
+    def __init__(self, num_classes = 18, pretrained = True):
+        super(Vgg19, self).__init__()
+        self.pretrained = pretrained
+        self.num_classes = num_classes
+        vgg19 = models.vgg19_bn(pretrained = self.pretrained)
+        self.model = vgg19
+        self.model.classifier[6] = nn.Linear(in_features = 4096, out_features = self.num_classes, bias = True)
+        
+        
+    def forward(self, x) :
+        return self.model(x)
+    
+    
+class Resnet18(nn.Module) :
+    def __init__(self, num_classes = 18, pretrained = True):
+        super(Resnet18, self).__init__()
+        self.pretrained = pretrained
+        self.num_classes = num_classes
+        resnet18 = models.resnet18(pretrained = self.pretrained)
+        self.model = resnet18
+        self.model.fc = nn.Linear(in_features = resnet18.fc.in_features, out_features = self.num_classes, bias = True)
+        
+    def forward(self, x) :
+        return self.model(x)
+    
+class Resnet50(nn.Module) :
+    def __init__(self, num_classes = 18, pretrained = True):
+        super(Resnet50, self).__init__()
+        self.pretrained = pretrained
+        self.num_classes = num_classes
+        resnet50 = models.resnet50(pretrained = self.pretrained)
+        self.model = resnet50
+        self.model.fc = nn.Linear(in_features = resnet50.fc.in_features, out_features = self.num_classes, bias = True)
+        
+    def forward(self, x) :
+        return self.model(x)
+    
+class Googlenet(nn.Module) :
+    def __init__(self, num_classes = 18, pretrained = True):
+        super(Googlenet, self).__init__()
+        self.pretrained = pretrained
+        self.num_classes = num_classes
+        googlenet = models.googlenet(pretrained = self.pretrained)
+        self.model = googlenet
+        self.model.fc = nn.Linear(in_features = googlenet.fc.in_features, out_features = self.num_classes, bias = True)
+        
+    def forward(self, x) :
+        return self.model(x)
 
-        """
-        1. 위와 같이 생성자의 parameter 에 num_claases 를 포함해주세요.
-        2. 나만의 모델 아키텍쳐를 디자인 해봅니다.
-        3. 모델의 output_dimension 은 num_classes 로 설정해주세요.
-        """
-
-    def forward(self, x):
-        """
-        1. 위에서 정의한 모델 아키텍쳐를 forward propagation 을 진행해주세요
-        2. 결과로 나온 output 을 return 해주세요
-        """
-        return x
+class Densenet121(nn.Module) :
+    def __init__(self, num_classes = 18, pretrained = True):
+        super(Densenet121, self).__init__()
+        self.pretrained = pretrained
+        self.num_classes = num_classes
+        densenet121 = models.densenet121(pretrained = self.pretrained)
+        self.model = densenet
+        self.model.fc = nn.Linear(in_features = densenet121.fc.in_features, out_features = self.num_classes, bias = True)
+        
+    def forward(self, x) :
+        return self.model(x)    
