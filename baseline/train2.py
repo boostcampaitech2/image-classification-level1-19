@@ -7,6 +7,8 @@ import random
 import re
 from importlib import import_module
 from pathlib import Path
+from adamp import AdamP
+from radam import RAdam
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -17,7 +19,6 @@ from torch.utils.tensorboard import SummaryWriter
 
 from dataset import MaskBaseDataset
 from loss import create_criterion
-from sklearn.metrics import f1_score
 
 def seed_everything(seed):
     torch.manual_seed(seed)
@@ -133,7 +134,7 @@ def train(data_dir, model_dir, args):
     train_loader = DataLoader(
         train_set,
         batch_size=args.batch_size,
-        num_workers=multiprocessing.cpu_count()//2,
+        num_workers=1,
         shuffle=True,
         pin_memory=use_cuda,
         drop_last=True,
@@ -142,7 +143,7 @@ def train(data_dir, model_dir, args):
     val_loader = DataLoader(
         val_set,
         batch_size=args.valid_batch_size,
-        num_workers=multiprocessing.cpu_count()//2,
+        num_workers=1,
         shuffle=False,
         pin_memory=use_cuda,
         drop_last=True,
@@ -168,7 +169,10 @@ def train(data_dir, model_dir, args):
         weight_decay=5e-4
     )
     
-    scheduler = StepLR(optimizer, args.lr_decay_step, gamma=0.5)
+    #params = model.parameters()
+    #optimizer = AdamP(params, lr=args.lr, betas=(0.9, 0.999), weight_decay=1e-2)
+    #optimizer = RAdam(params, lr=args.lr, betas=(0.9, 0.999), eps=1e-8, weight_decay=0, degenerated_to_sgd=False)
+    scheduler = StepLR(optimizer, args.lr_decay_step, gamma=0.2)
 
     # -- logging
     logger = SummaryWriter(log_dir=save_dir)
@@ -177,10 +181,7 @@ def train(data_dir, model_dir, args):
 
     best_val_acc = 0
     best_val_loss = np.inf
-    for epoch in range(1,args.epochs+1):
-        #f1 score
-        epoch_f1 = 0
-        n_iter = 0
+    for epoch in range(args.epochs):
         # train loop
         model.train()
         loss_value = 0
@@ -191,16 +192,26 @@ def train(data_dir, model_dir, args):
             labels = labels.to(device)
 
             optimizer.zero_grad()
+            if args.beta > 0 and np.random.random()>0.5: # cutmix가 실행될 경우     
+                lam = np.random.beta(args.beta, args.beta)
+                rand_index = torch.randperm(inputs.size()[0]).to(device)
+                target_a = labels # 원본 이미지 label
+                target_b = labels[rand_index] # 패치 이미지 label       
+                bbx1, bby1, bbx2, bby2 = rand_bbox(inputs.size(), lam)
+                inputs[:, :, bbx1:bbx2, bby1:bby2] = inputs[rand_index, :, bbx1:bbx2, bby1:bby2]
+                lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (inputs.size()[-1] * inputs.size()[-2]))
+                outs = model(inputs)
+                loss = criterion(outs, target_a) * lam + criterion(outs, target_b) * (1. - lam) # 패치 이미지와 원본 이미지의 비율에 맞게 loss를 계산을 해주는 부분
 
-            outs = model(inputs)
-            preds = torch.argmax(outs, dim=-1)
-            loss = criterion(outs, labels)
+            else: # cutmix가 실행되지 않았을 경우
+                outs = model(inputs)
+                loss = criterion(outs, labels)
+
+            _, preds= torch.argmax(outs, dim = -1) 
+            
 
             loss.backward()
             optimizer.step()
-
-            epoch_f1 += f1_score(labels.cpu().numpy(),preds.cpu().numpy(),average='macro')
-            n_iter += 1
 
             loss_value += loss.item()
             matches += (preds == labels).sum().item()
@@ -208,7 +219,6 @@ def train(data_dir, model_dir, args):
                 train_loss = loss_value / args.log_interval
                 train_acc = matches / args.batch_size / args.log_interval
                 current_lr = get_lr(optimizer)
-
                 print(
                     f"Epoch[{epoch}/{args.epochs}]({idx + 1}/{len(train_loader)}) || "
                     f"training loss {train_loss:4.4} || training accuracy {train_acc:4.2%} || lr {current_lr}"
@@ -251,14 +261,13 @@ def train(data_dir, model_dir, args):
             val_loss = np.sum(val_loss_items) / len(val_loader)
             val_acc = np.sum(val_acc_items) / len(val_set)
             best_val_loss = min(best_val_loss, val_loss)
-            epoch_f1 = epoch_f1/n_iter
             if val_acc > best_val_acc:
                 print(f"New best model for val accuracy : {val_acc:4.2%}! saving the best model..")
                 torch.save(model.module.state_dict(), f"{save_dir}/best.pth")
                 best_val_acc = val_acc
             torch.save(model.module.state_dict(), f"{save_dir}/last.pth")
             print(
-                f"[Val] acc : {val_acc:4.2%}, loss: {val_loss:4.2} , f1_score : {epoch_f1:4f} || "
+                f"[Val] acc : {val_acc:4.2%}, loss: {val_loss:4.2} || "
                 f"best acc : {best_val_acc:4.2%}, best loss: {best_val_loss:4.2}"
             )
             logger.add_scalar("Val/loss", val_loss, epoch)
@@ -282,7 +291,7 @@ if __name__ == '__main__':
     parser.add_argument("--resize", nargs="+", type=list, default=[128, 96], help='resize size for image when training')
     parser.add_argument('--batch_size', type=int, default=128, help='input batch size for training (default: 128)')
     parser.add_argument('--valid_batch_size', type=int, default=1000, help='input batch size for validing (default: 1000)')
-    parser.add_argument('--model', type=str, default='ResnetModel', help='model type (default: ResnetModel)')
+    parser.add_argument('--model', type=str, default='EffiModel', help='model type (default: EffiModel)')
     parser.add_argument('--optimizer', type=str, default='AdamW', help='optimizer type (default: AdamW)')
     parser.add_argument('--lr', type=float, default=1e-3, help='learning rate (default: 1e-3)')
     parser.add_argument('--val_ratio', type=float, default=0.2, help='ratio for validaton (default: 0.2)')
@@ -290,6 +299,9 @@ if __name__ == '__main__':
     parser.add_argument('--lr_decay_step', type=int, default=20, help='learning rate scheduler deacy step (default: 20)')
     parser.add_argument('--log_interval', type=int, default=20, help='how many batches to wait before logging training status')
     parser.add_argument('--name', default='exp', help='model save at {SM_MODEL_DIR}/{name}')
+    parser.add_argument('--cutmix_prob', default=0, type=float, help='cutmix probability')
+    parser.add_argument('--beta', default=0, type=float,
+                    help='hyperparameter beta')
     # Container environment
     parser.add_argument('--data_dir', type=str, default=os.environ.get('SM_CHANNEL_TRAIN', '/opt/ml/input/data/train/images'))
     parser.add_argument('--model_dir', type=str, default=os.environ.get('SM_MODEL_DIR', './model'))
@@ -301,3 +313,4 @@ if __name__ == '__main__':
     model_dir = args.model_dir
 
     train(data_dir, model_dir, args)
+

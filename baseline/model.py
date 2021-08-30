@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-
+from efficientnet_pytorch import EfficientNet
+from torchvision import models
 class BaseModel(nn.Module):
     def __init__(self, num_classes):
         super().__init__()
@@ -33,21 +33,88 @@ class BaseModel(nn.Module):
         x = x.view(-1, 128)
         return self.fc(x)
 
+class EffiModel(nn.Module):
+    def __init__(self, num_classes=18) -> None:
+        super(EffiModel, self).__init__()
+        self.num_classes = num_classes
+        self.model = self.get_efficient_b4()
+        
+
+    def get_efficient_b4(self):
+        efficient = EfficientNet.from_pretrained('efficientnet-b4')
+        efficient.classifier = nn.Sequential(
+    nn.Linear( 1280* 7 * 7, 4096),
+    nn.ReLU(True),
+    nn.Dropout(0.2),
+    nn.Linear(4096, 4096),
+    nn.ReLU(True),
+    nn.Dropout(0.2),
+    nn.Linear(4096, self.num_classes),)
+
+        return efficient
+
+    def forward(self, x):
+        return self.model(x)
+
+class ResnetModel(nn.Module):
+    def __init__(self, num_classes=18) -> None:
+        super(ResnetModel, self).__init__()
+        self.num_classes = num_classes
+        self.model = self.get_resnet()
+        
+
+    def get_resnet(self):
+        resnet = models.resnet18(pretrained=True)
+        resnet.classifier = nn.Sequential(
+    nn.Linear( 512* 7 * 7, 4096),
+    nn.ReLU(True),
+    nn.Dropout(0.2),
+    nn.Linear(4096, 4096),
+    nn.ReLU(True),
+    nn.Dropout(0.2),
+    nn.Linear(4096, self.num_classes),)
+
+        return resnet
+
+    def forward(self, x):
+        return self.model(x)
+
+
+class EnsembleModel(nn.Module):
+    '''
+    This is ensemble class for improving score
+    Args:
+        models: A list of MaskModel
+        device(str): Cuda or CPU
+    '''
+    def __init__(self, models, num_classes=18, device='cuda'):
+        super(EnsembleModel, self).__init__()
+        self.models = nn.ModuleList([m.model for m in models])
+        self.device = device
+        self.num_classes = num_classes
+    
+    # just input x into all model sequentially
+    def forward(self, x):
+        output = torch.zeros([x.size(0), self.num_classes]).to(self.device)
+        for model in self.models:
+            output += model(x)
+        return output
+
+
 
 # Custom Model Template
 class MyModel(nn.Module):
-    def __init__(self, num_classes):
+    def __init__(self, num_classes=18) -> None:
         super().__init__()
-
-        """
-        1. 위와 같이 생성자의 parameter 에 num_claases 를 포함해주세요.
-        2. 나만의 모델 아키텍쳐를 디자인 해봅니다.
-        3. 모델의 output_dimension 은 num_classes 로 설정해주세요.
-        """
+        self.model = EfficientNet.from_pretrained('efficientnet-b4', num_classes=18)
+        self.model.classifier = nn.Sequential(
+    nn.Linear(1280* 7 * 7, 4096),
+    nn.ReLU(True),
+    nn.Dropout(),
+    nn.Linear(4096, 4096),
+    nn.ReLU(True),
+    nn.Dropout(),
+    nn.Linear(4096,num_classes),)
 
     def forward(self, x):
-        """
-        1. 위에서 정의한 모델 아키텍쳐를 forward propagation 을 진행해주세요
-        2. 결과로 나온 output 을 return 해주세요
-        """
-        return x
+        return self.model(x)
