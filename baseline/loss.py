@@ -64,12 +64,30 @@ class F1Loss(nn.Module):
         f1 = f1.clamp(min=self.epsilon, max=1 - self.epsilon)
         return 1 - f1.mean()
 
+class CosineLoss(nn.Module) :
+    def __init__(self, xent=.1, reduction="mean"):
+        super(CosineLoss, self).__init__()
+        self.xent = xent
+        self.reduction = reduction
+        
+        self.y = torch.Tensor([1])
+        
+    def forward(self, y_pred, y_true) :
+        use_cuda = torch.cuda.is_available()
+        device = torch.device("cuda" if use_cuda else "cpu")
+        cosine_loss = F.cosine_embedding_loss(y_pred,
+                                    F.one_hot(y_true, num_classes=y_pred.size(-1)), self.y.to(device), reduction=self.reduction)
+        cent_loss = F.cross_entropy(F.normalize(y_pred), y_true, reduction=self.reduction)
+        
+        return cosine_loss + self.xent * cent_loss
 
+    
 _criterion_entrypoints = {
     'cross_entropy': nn.CrossEntropyLoss,
     'focal': FocalLoss,
     'label_smoothing': LabelSmoothingLoss,
-    'f1': F1Loss
+    'f1': F1Loss,
+    'cosine' : CosineLoss
 }
 
 
