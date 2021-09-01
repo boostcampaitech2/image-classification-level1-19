@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision
+import timm
+import math
 
 from efficientnet_pytorch import EfficientNet
 
@@ -118,3 +120,16 @@ class MyModel(nn.Module):
         densenet121.classifier = nn.Linear(in_features=densenet121.classifier.in_features,
                                            out_features=self.num_classes, bias=True)
         return densenet121
+
+
+class Ensemble(nn.Module):
+    def __init__(self, device, models):
+        super(Ensemble, self).__init__()
+        self.device = device
+        self.models = nn.ModuleList(models)
+
+    def forward(self, x):
+        output = torch.zeros([x.size(0), 3]).to(self.device)
+        for model in self.models:
+            output += model(x)
+        return output

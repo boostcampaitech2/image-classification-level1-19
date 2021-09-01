@@ -2,7 +2,9 @@ import os
 import random
 import numpy as np
 import torch
+import pandas as pd
 
+from pandas_streaming.df import train_test_apart_stratify
 from albumentations import *
 from albumentations.pytorch import ToTensorV2
 from collections import defaultdict
@@ -31,11 +33,8 @@ class BaseAugmentation:
             # Resize(resize, Image.BILINEAR),
             CenterCrop(crop),
             ToTensor(),
-            Normalize(mean=mean, std=std),
+            # Normalize(mean=mean, std=std),
         ])
-
-        # albumentation
-        # self.transform = get_transforms('tr')
 
     def __call__(self, image):
         return self.transform(image)
@@ -58,11 +57,11 @@ class AddGaussianNoise(object):
 # Custom Augmentation Ex
 # ============================================
 class CustomAugmentation:
-    def __init__(self, resize, mean, std, **args):
+    def __init__(self, resize, mean, std, crop, **args):
         self.transform = transforms.Compose([
-            CenterCrop((320, 256)),
-            Resize(resize, Image.BILINEAR),
-            ColorJitter(0.1, 0.1, 0.1, 0.1),
+            CenterCrop(crop),
+            # Resize(resize, Image.BILINEAR),
+            ColorJitter(0.2, 0.2, 0.2),
             ToTensor(),
             Normalize(mean=mean, std=std),
             AddGaussianNoise()
@@ -135,6 +134,11 @@ class MaskBaseDataset(Dataset):
         self.gender_labels = []
         self.age_labels = []
 
+        # -- split by class and person
+        self.all_labels = []
+        self.indexs = []
+        self.groups = []
+
         self.transform = None
         self.setup()
         self.calc_statistics()
@@ -147,6 +151,7 @@ class MaskBaseDataset(Dataset):
             self.num_classes = 2
 
     def setup(self):
+        cnt = 0
         profiles = os.listdir(self.data_dir)
         for profile in profiles:
             if profile.startswith("."):
@@ -171,6 +176,12 @@ class MaskBaseDataset(Dataset):
                     self.mask_labels.append(mask_label)
                     self.gender_labels.append(gender_label)
                     self.age_labels.append(age_label)
+
+                    # -- split by class and person
+                    self.all_labels.append(self.encode_multi_class(mask_label, gender_label, age_label))
+                    self.indexs.append(cnt)
+                    self.groups.append(id)
+                    cnt += 1
 
             # only age >= 60 dataset
             else:
@@ -291,11 +302,13 @@ class MaskBaseDataset(Dataset):
     def split_dataset(self, aug_flag=False) -> Tuple[Subset, Subset]:
         # -- transformed dataset
         if aug_flag:
-            self.val_ratio = 0.5
-        n_val = int(len(self) * self.val_ratio)
-        n_train = len(self) - n_val
-        train_set, val_set = random_split(self, [n_train, n_val])
-        return train_set, val_set
+            self.val_ratio = 0.8
+
+        df = pd.DataFrame({"indexs": self.indexs, "groups": self.groups, "labels": self.all_labels})
+        train, valid = train_test_apart_stratify(df, group="groups", stratify="labels", test_size=self.val_ratio)
+        train_index = train["indexs"].tolist()
+        valid_index = valid["indexs"].tolist()
+        return [Subset(self, train_index), Subset(self, valid_index)]
 
 # Dataset based on people
 class MaskSplitByProfileDataset(MaskBaseDataset):
@@ -363,6 +376,38 @@ class MaskSplitByProfileDataset(MaskBaseDataset):
         self.age_labels.clear()
         self.indices = defaultdict(list)
 
+# -- split by people based on trian : val ratio
+class MaskSplitByClassDataset(MaskSplitByProfileDataset):
+
+    def __init__(self, data_dir, mean=(0.548, 0.504, 0.479), std=(0.237, 0.247, 0.246), val_ratio=0.2, task_type='all', age_flag=0):
+        self.indices = defaultdict(list)
+        self.task_type = task_type
+        self.age_flag = age_flag
+        super().__init__(data_dir, mean, std, val_ratio, task_type, age_flag)
+
+    def split_dataset(self, aug_flag=False) -> List[Subset]:
+        from sklearn.model_selection import StratifiedShuffleSplit
+        # -- add transformed dataset to original train set
+        if aug_flag:
+            sss = StratifiedShuffleSplit(n_splits=1, test_size=0.5, random_state=43)
+        else:
+            sss = StratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=43)
+
+        indices = list(range(len(self.image_paths)))
+        train_df = pd.DataFrame({'mask': self.mask_labels, 'gender': self.gender_labels, 'age': self.age_labels})
+        train_df['label'] = train_df[['mask', 'gender', 'age']].apply(
+            lambda x: self.encode_multi_class(x[0], x[1], x[2]), axis=1)
+
+        if self.task_type == 'all':
+            self.task_type = 'label'
+
+        for train_index, test_index in sss.split(indices, train_df[self.task_type]):
+            print(len(train_index), len(test_index))
+        print(train_df[self.task_type].iloc[train_index].value_counts().sort_index())
+        print(train_df[self.task_type].iloc[test_index].value_counts().sort_index())
+
+        return [Subset(self, train_index), Subset(self, test_index)]
+
 class TestDataset(Dataset):
     def __init__(self, img_paths, resize, mean=(0.548, 0.504, 0.479), std=(0.237, 0.247, 0.246)):
         self.img_paths = img_paths
@@ -370,7 +415,7 @@ class TestDataset(Dataset):
             # Resize(resize, Image.BILINEAR),
             CenterCrop((250, 200)),
             ToTensor(),
-            Normalize(mean=mean, std=std),
+            # Normalize(mean=mean, std=std),
         ])
 
     def __getitem__(self, index):

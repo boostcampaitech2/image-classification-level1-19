@@ -22,7 +22,7 @@ from inference import inference, inference_combine
 from loss import create_criterion
 from sklearn.model_selection import *
 from torch.optim.lr_scheduler import StepLR
-from torch.utils.data import DataLoader, ConcatDataset, SubsetRandomSampler
+from torch.utils.data import DataLoader, ConcatDataset, SubsetRandomSampler, Subset
 from torch.utils.tensorboard import SummaryWriter
 from utils import *
 
@@ -105,7 +105,6 @@ def common_train(data_dir, model_dir, args):
         task_type=args.task_type
     )
     print(' ============ original dataset : ', len(dataset))
-
     num_classes = dataset.num_classes  # 18
     print(' ============ num classes : ', num_classes)
 
@@ -118,55 +117,79 @@ def common_train(data_dir, model_dir, args):
         crop=(args.img_height, args.img_width)
     )
 
+    # -- custom augmentation
+    transform_module = getattr(import_module("dataset"), 'CustomAugmentation')  # default: CustomAugmentation
+    custom_transform = transform_module(
+        resize=args.resize,
+        mean=dataset.mean,
+        std=dataset.std,
+        crop=(args.img_height, args.img_width)
+    )
+
     # -- std and mean of RGB
     std = dataset.std
     mean = dataset.mean
 
-    # -- original not transformed dataset
+    # -- original not transformed (basic transformed) dataset
     dataset.set_transform(transform, False)
 
     # -- original => train : val
     train_set, val_set = dataset.split_dataset()
-    val_set, test_set = train_test_split(val_set, test_size=0.5, shuffle=True, random_state=42)
+    # val_set, test_set = train_test_split(val_set, test_size=0.5, shuffle=True, random_state=42)
 
-    # -- additional transformed dataset
-    additional_dataset = copy(dataset)
-    additional_dataset.set_transform(get_train_transform(additional_dataset.mean, additional_dataset.std, args), False)
+    # -- first transformed dataset
+    first_transformed_dataset = copy(dataset)
+    first_transformed_dataset.set_transform(get_train_transform(first_transformed_dataset.mean, first_transformed_dataset.std, args), False)
+    first_transformed_train_set, additional_val_set = first_transformed_dataset.split_dataset(True) # val_ratio 0.8
+    print(' ============ first transformed dataset : ', len(first_transformed_train_set))
 
-    additional_train_set, additional_val_set = additional_dataset.split_dataset(True)
-    print(' ============ transformed dataset : ', len(additional_train_set))
+    # -- second transformed dataset
+    second_transformed_dataset = copy(dataset)
+    second_transformed_dataset.set_transform(custom_transform, False)
+    second_transformed_train_set, additional_val_set = second_transformed_dataset.split_dataset(True)  # val_ratio 0.8
+    print(' ============ second transformed dataset : ', len(second_transformed_train_set))
+
+    # -- extra not transformed (basic transformed) test set
+    test_dataset = copy(dataset)
+    test_dataset.set_transform(transform, False)
+    test_set, extra_val_set = test_dataset.split_dataset(True)
 
     # -- original + transformed => train_set
-    train_set = ConcatDataset([train_set, additional_train_set])
+    train_set = ConcatDataset([train_set, first_transformed_train_set, second_transformed_train_set])
     print(' ============ final dataset : ', len(train_set))
 
     # -- train general or k-fold
     if args.fold_flag:
-        fold_train(train_set, test_set, save_dir, dataset_module, num_classes, args)
+        label_list = get_label_list(train_set)
+        fold_train(train_set, test_set, save_dir, dataset_module, num_classes, label_list, args)
     else:
         general_train(train_set, val_set, test_set, save_dir, dataset_module, num_classes, args)
 
 # K-Fold CV
-def fold_train(train_set, test_set, save_dir, dataset_module, num_classes, args):
-    kfold = StratifiedKFold(n_splits=args.k_folds, shuffle=True, random_state=42)
+def fold_train(train_set, test_set, save_dir, dataset_module, num_classes, label_list, args):
+    # kfold = StratifiedKFold(n_splits=args.k_folds, shuffle=True, random_state=43)
+    kfold = KFold(n_splits=args.k_folds, shuffle=True, random_state=43)
 
     print(' --- K-Fold Start --- ')
     for fold_num, (train_idx, val_idx) in enumerate(kfold.split(train_set)):
-        train_sampler = SubsetRandomSampler(train_idx)
-        val_sampler = SubsetRandomSampler(val_idx)
-        len_valid = len(val_sampler)
+        # new_train_set = Subset(train_set, train_idx)
+        # new_val_set = Subset(train_set, val_idx)
 
-        train_loader = DataLoader(train_set, batch_size=args.batch_size, num_workers=2, pin_memory=True, sampler=train_sampler)
-        val_loader = DataLoader(train_set, batch_size=args.batch_size, num_workers=2, pin_memory=True, sampler=val_sampler)
-        test_loader = DataLoader(test_set, batch_size=args.batch_size, num_workers=2, pin_memory=True)
+        train_sampler = SubsetRandomSampler(train_idx)
+        valid_sampler = SubsetRandomSampler(val_idx)
+        len_valid = len(val_idx)
+
+        train_loader = DataLoader(train_set, batch_size=args.batch_size, num_workers=multiprocessing.cpu_count() // 2, pin_memory=True, sampler=train_sampler)
+        val_loader = DataLoader(train_set, batch_size=args.batch_size, num_workers=multiprocessing.cpu_count() // 2, pin_memory=True, sampler=valid_sampler)
+        test_loader = DataLoader(test_set, batch_size=args.batch_size, num_workers=multiprocessing.cpu_count() // 2, pin_memory=True)
 
         print(' ============ (K-Fold) train loader length : ', len(train_loader))
         print(' ============ (K-Fold) val loader length : ', len(val_loader))
         print(' ============ (K-Fold) test loader length : ', len(test_loader))
 
         # -- training
-        train_model(train_loader, val_loader, test_loader, len_valid, save_dir, args, dataset_module, num_classes, fold_num=fold_num)
-        print(f' --- K-Fold_{fold_num} End --- ')
+        train_model(train_loader, val_loader, test_loader, len_valid, save_dir, args, dataset_module, num_classes, fold_num=fold_num + 1)
+        print(f' --- K-Fold_{fold_num + 1} End --- ')
 
 # General
 def general_train(train_set, val_set, test_set, save_dir, dataset_module, num_classes, args):
@@ -187,7 +210,7 @@ def general_train(train_set, val_set, test_set, save_dir, dataset_module, num_cl
 
         elderly_dataset.set_transform(transform, True)
         elderly_train_set, elderly_val_set = elderly_dataset.split_dataset()
-        elderly_val_set, elderly_test_set = train_test_split(elderly_val_set, test_size=0.5, shuffle=True, random_state=42)
+        elderly_val_set, elderly_test_set = train_test_split(elderly_val_set, test_size=0.5, shuffle=True, random_state=43)
 
         train_set = ConcatDataset([train_set, elderly_train_set])
         val_set = ConcatDataset([val_set, elderly_val_set])
@@ -199,7 +222,7 @@ def general_train(train_set, val_set, test_set, save_dir, dataset_module, num_cl
         num_workers=multiprocessing.cpu_count() // 2,
         shuffle=True,
         pin_memory=use_cuda,
-        # drop_last=True,
+        # drop_last=True
         # sampler=weighted_sampler
     )
 
@@ -211,7 +234,7 @@ def general_train(train_set, val_set, test_set, save_dir, dataset_module, num_cl
         num_workers=multiprocessing.cpu_count() // 2,
         shuffle=False,
         pin_memory=use_cuda,
-        # drop_last=True,
+        # drop_last=True
     )
 
     print(' ============ val loader length : ', len(val_loader))
@@ -402,6 +425,7 @@ if __name__ == '__main__':
     parser.add_argument('--age_flag', type=int, default=0, help='selection of age >= 60 (default: False)')
     parser.add_argument('--fold_flag', type=int, default=0, help='fold flag (default: False)')
     parser.add_argument('--k_folds', type=int, default=5, help='split ratio (default: 5)')
+    # parser.add_argument('--k_folds', type=int, default=5, help='split ratio (default: 5)')
 
     parser.add_argument('--optimizer', type=str, default='SGD', help='optimizer type (default: SGD)')
     parser.add_argument('--lr', type=float, default=1e-3, help='learning rate (default: 1e-3)')

@@ -5,6 +5,7 @@ import torch.nn as nn
 import numpy as np
 import torchvision.transforms as transforms
 
+from tqdm import tqdm
 from sklearn.metrics import confusion_matrix, f1_score, accuracy_score, recall_score, precision_score, classification_report
 from mlxtend.plotting import plot_confusion_matrix
 from tqdm import tqdm
@@ -146,6 +147,13 @@ def get_ans(mask, gender, age):
         if gender == 1 and age == 2:
             return 17
 
+# -- get label list
+def get_label_list(dataset):
+    label_list = []
+    for ds in tqdm(dataset):
+        label_list.append(ds[1])
+    return label_list
+
 # get train dataset transform => lots of transform
 def get_train_transform(mean, std, args):
     return transforms.Compose([
@@ -156,10 +164,35 @@ def get_train_transform(mean, std, args):
         transforms.Normalize(mean=mean, std=std)
     ])
 
+# -- sub transform for train
+def get_train_transform_second(mean, std, args):
+    return transform.Compose([
+         transform.Resize((args.img_height, args.img_width)),
+         transform.RandomHorizontalFlip(),
+         transform.RandomRotation(10),
+         transform.RandomAffine(translate=(0.05, 0.05), degrees=0),
+         transform.ToTensor(),
+         transform.RandomErasing(inplace=True, scale=(0.01, 0.23)),
+         transform.Normalize(mean=mean, std=std)
+    ])
+
+# -- sub transform for train
+def get_train_transform_third(mean, std, args):
+    return transform.Compose([
+        transform.Resize((args.img_height, args.img_width)),
+        transform.RandomHorizontalFlip(p=0.5),
+        transform.RandomRotation(15),
+        transform.RandomAffine(translate=(0.08, 0.1), degrees=15),
+        transform.ToTensor(),
+        transform.Normalize(mean=mean, std=std)
+    ])
+
 # get valid transform => at least transform
 def get_valid_transform(mean, std, args):
     return transforms.Compose([
-        transforms.CenterCrop((args.img_height, args.img_width)),
+        transforms.RandomResizedCrop((args.img_height, args.img_width), scale=(0.5, 1.0)),
+        transforms.RandomHorizontalFlip(),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
         transforms.ToTensor(),
         transforms.Normalize(mean=mean, std=std)
     ])

@@ -3,6 +3,7 @@ import os
 import pandas as pd
 import torch
 
+from model import Ensemble
 from utils import get_ans
 from torch.utils.data import DataLoader
 from importlib import import_module
@@ -23,11 +24,19 @@ def load_model(saved_model, num_classes, device, args):
     # tar = tarfile.open(tarpath, 'r:gz')
     # tar.extractall(path=saved_model)
 
-    model_path = os.path.join(saved_model, 'proc38/best.pth')
+    # -- ensemble flag
+    # if args.fold_flag:
+    #     models = []
+    #     for i in range(5):
+    #         model_path = os.path.join(saved_model, f'proc58/best_{i + 1}.pth')
+    #         model.load_state_dict(torch.load(model_path, map_location=device))
+    #         models.append(model)
+    #     ensemble_model = Ensemble(device, models)
+    #     return ensemble_model
+
+    model_path = os.path.join(saved_model, 'proc71/best_4.pth')
     model.load_state_dict(torch.load(model_path, map_location=device))
-
     return model
-
 
 @torch.no_grad()
 def inference(data_dir, model_dir, output_dir, args):
