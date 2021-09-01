@@ -1,285 +1,454 @@
-import os
-import copy
-import time
 import argparse
-import torch
-import torch.nn as nn
-import numpy as np
+import glob
+import json
+import multiprocessing
+import os
+import random
+import re
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import torch
+import torch.utils.data.sampler as sampler
 import torchvision.transforms as transforms
 
-from utils import is_val_loss_decreasing
-from tqdm import tqdm
-from pandas.core.algorithms import mode
-from model import EnsembleModel, MaskModel
-from inference import test_prediction
-from dataset import MaskDataset
-from torch.utils.data import DataLoader, ConcatDataset
-from sklearn.model_selection import train_test_split
+from copy import copy
+from torchsummary import summary
+from new.new_dataset import MaskDataset
+from importlib import import_module
+from pathlib import Path
+from dataset import MaskBaseDataset
+from inference import inference, inference_combine
+from loss import create_criterion
+from sklearn.model_selection import *
+from torch.optim.lr_scheduler import StepLR
+from torch.utils.data import DataLoader, ConcatDataset, SubsetRandomSampler, Subset
+from torch.utils.tensorboard import SummaryWriter
+from utils import *
 
-# reproduct
-SEED = 123
-torch.manual_seed(SEED)
-np.random.seed(SEED)
+std = (0.5, 0.5, 0.5)
+mean = (0.2, 0.2, 0.2)
 
-# check loader
-def check_loader(loaders):
-    X, y = next(iter(loaders))
-    print('X[0] shape : ', X[0].shape)
-    print('y[0] value : ', y[0])
-    print('X length : ', len(X))
+def seed_everything(seed):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)  # if use multi-GPU
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    np.random.seed(seed)
+    random.seed(seed)
 
-# check image
-def check_image(image):
-    image = image.numpy()
-    image = np.transpose(image, (1, 2, 0))
-    plt.figure(figsize=(10, 5))
-    plt.subplot(1, 2, 1)
-    plt.imshow(image)
+def get_lr(optimizer):
+    for param_group in optimizer.param_groups:
+        return param_group['lr']
 
-    # ============================
-    # histogram of color
-    # ============================
-    # plt.axis('off')
-    # histo = plt.subplot(1, 2, 2)
-    # histo.set_ylabel('Count')
-    # histo.set_xlabel('Pixel Intensity')
-    # plt.hist(image.flatten(), bins=10, lw=0, alpha=0.5, color='r')
+def grid_image(np_images, gts, preds, n=16, shuffle=False):
+    batch_size = np_images.shape[0]
+    assert n <= batch_size
 
-# return transforms
-def get_transformer(aug_flag=True):
-    transformer = dict()
-    transformer['origin'] = transforms.Compose([
-                                transforms.Resize((224, 224)),
-                                transforms.CenterCrop(224),
-                                transforms.ToTensor(), 
-                                transforms.Normalize((0.4124234616756439, 0.3674212694168091, 0.2578217089176178), 
-                                                     (0.3268945515155792, 0.29282665252685547, 0.29053378105163574))
-                                ])
+    choices = random.choices(range(batch_size), k=n) if shuffle else list(range(n))
+    figure = plt.figure(figsize=(12, 18 + 2))  # cautions: hardcoded, 이미지 크기에 따라 figsize 를 조정해야 할 수 있습니다
+    plt.subplots_adjust(top=0.8)               # cautions: hardcoded, 이미지 크기에 따라 top 를 조정해야 할 수 있습니다
+    n_grid = np.ceil(n ** 0.5)
+    tasks = ["mask", "gender", "age"]
+    for idx, choice in enumerate(choices):
+        gt = gts[choice].item()
+        pred = preds[choice].item()
+        image = np_images[choice]
+        # title = f"gt: {gt}, pred: {pred}"
+        gt_decoded_labels = MaskBaseDataset.decode_multi_class(gt)
+        pred_decoded_labels = MaskBaseDataset.decode_multi_class(pred)
+        title = "\n".join([
+            f"{task} - gt: {gt_label}, pred: {pred_label}"
+            for gt_label, pred_label, task
+            in zip(gt_decoded_labels, pred_decoded_labels, tasks)
+        ])
 
-    if aug_flag:
-        transformer['aug1'] = transforms.Compose([
-                                transforms.Resize((224, 224)),
-                                transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
-                                transforms.RandomRotation(5),
-                                transforms.RandomAffine(degrees=11, translate=(0.1,0.1), scale=(0.8,0.8)),
-                                transforms.ToTensor(),
-                                ])
+        plt.subplot(n_grid, n_grid, idx + 1, title=title)
+        plt.xticks([])
+        plt.yticks([])
+        plt.grid(False)
+        plt.imshow(image, cmap=plt.cm.binary)
 
-        transformer['aug2'] = transforms.Compose([
-                                transforms.Resize((224, 224)),
-                                transforms.CenterCrop(224),
-                                transforms.RandomHorizontalFlip(),
-                                transforms.ToTensor(),
-                                transforms.Normalize((0.4124234616756439, 0.3674212694168091, 0.2578217089176178), 
-                                                    (0.3268945515155792, 0.29282665252685547, 0.29053378105163574))
-                                ])
+    return figure
 
-        transformer['aug3'] = transforms.Compose([
-                                transforms.Resize((224, 224)),
-                                transforms.CenterCrop(224),
-                                transforms.RandomHorizontalFlip(p=0.5),
-                                transforms.ToTensor(),
-                                ])
+# auto increment for path
+def increment_path(path, exist_ok=False):
+    """ Automatically increment path, i.e. runs/exp --> runs/exp0, runs/exp1 etc.
+    Args:
+        path (str or pathlib.Path): f"{model_dir}/{args.name}".
+        exist_ok (bool): whether increment path (increment if False).
+    """
+    path = Path(path)
+    if (path.exists() and exist_ok) or (not path.exists()):
+        return str(path)
+    else:
+        dirs = glob.glob(f"{path}*")
+        matches = [re.search(rf"%s(\d+)" % path.stem, d) for d in dirs]
+        i = [int(m.groups()[0]) for m in matches if m]
+        n = max(i) + 1 if i else 2
+        return f"{path}{n}"
 
-    return transformer
+# Starting Point
+def common_train(data_dir, model_dir, args):
+    global std, mean
 
-def main(config):
-    root = './input/data'
-    transform = get_transformer(True)
-    
-    mask_train_origin = MaskDataset(root, transform['origin'], train=True)
-    mask_test_origin = MaskDataset(root, transform['origin'], train=False)
+    # -- reproducibility
+    seed_everything(args.seed)
+    save_dir = increment_path(os.path.join(model_dir, args.name))
 
-    # age_flag = True => augmentating only age >= 60
-    # mask_train_aug1 = MaskDataset(root, transform['aug1'], age_flag=False)
-    # mask_train_aug2 = MaskDataset(root, transform['aug2'], age_flag=False)
-    # mask_train_aug3 = MaskDataset(root, transform['aug3'], age_flag=False)
+    # -- dataset
+    dataset_module = getattr(import_module("dataset"), args.dataset)  # default: MaskBaseDataset
+    dataset = dataset_module(
+        data_dir=data_dir,
+        val_ratio=args.val_ratio,
+        task_type=args.task_type
+    )
+    print(' ============ original dataset : ', len(dataset))
+    num_classes = dataset.num_classes  # 18
+    print(' ============ num classes : ', num_classes)
 
-    # check_image(mask_train_origin[0]['image'][0])
+    # -- augmentation
+    transform_module = getattr(import_module("dataset"), args.augmentation)  # default: BaseAugmentation
+    transform = transform_module(
+        resize=args.resize,
+        mean=dataset.mean,
+        std=dataset.std,
+        crop=(args.img_height, args.img_width)
+    )
 
-    # train_val = ConcatDataset([mask_train_origin, mask_train_aug1, mask_train_aug2, mask_train_aug3])
-    # train_val = ConcatDataset([mask_train_origin, mask_train_aug1])
+    # -- custom augmentation
+    transform_module = getattr(import_module("dataset"), 'CustomAugmentation')  # default: CustomAugmentation
+    custom_transform = transform_module(
+        resize=args.resize,
+        mean=dataset.mean,
+        std=dataset.std,
+        crop=(args.img_height, args.img_width)
+    )
 
-    train, val = train_test_split(mask_train_origin, test_size=0.1, shuffle=True, random_state=43)
-    print('=========== Train and Val ===========')
+    # -- std and mean of RGB
+    std = dataset.std
+    mean = dataset.mean
 
-    loaders = {
-        'train': DataLoader(train, batch_size=128, num_workers=4, pin_memory=True, drop_last=True),
-        'val': DataLoader(val, batch_size=128, num_workers=4, pin_memory=True, drop_last=True),
-        'test': DataLoader(mask_test_origin, batch_size=128, num_workers=4, pin_memory=True)
-    }
+    # -- original not transformed (basic transformed) dataset
+    dataset.set_transform(transform, False)
 
-    dataset_sizes = {
-        'train': len(train),
-        'val': len(val),
-        'test': len(mask_test_origin)
-    }
+    # -- original => train : val
+    train_set, val_set = dataset.split_dataset()
+    # val_set, test_set = train_test_split(val_set, test_size=0.5, shuffle=True, random_state=42)
 
-    # check X, y
-    check_loader(loaders['train'])
-    print('loaders[train] length : ', len(loaders['train']))
+    # -- first transformed dataset
+    first_transformed_dataset = copy(dataset)
+    first_transformed_dataset.set_transform(get_train_transform(first_transformed_dataset.mean, first_transformed_dataset.std, args), False)
+    first_transformed_train_set, additional_val_set = first_transformed_dataset.split_dataset(True) # val_ratio 0.8
+    print(' ============ first transformed dataset : ', len(first_transformed_train_set))
 
-    # gpu
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    # -- second transformed dataset
+    second_transformed_dataset = copy(dataset)
+    second_transformed_dataset.set_transform(custom_transform, False)
+    second_transformed_train_set, additional_val_set = second_transformed_dataset.split_dataset(True)  # val_ratio 0.8
+    print(' ============ second transformed dataset : ', len(second_transformed_train_set))
 
-    # hyper params
-    num_epochs = 10
-    num_classes = len(mask_train_origin.classes)
+    # -- extra not transformed (basic transformed) test set
+    test_dataset = copy(dataset)
+    test_dataset.set_transform(transform, False)
+    test_set, extra_val_set = test_dataset.split_dataset(True)
 
-    # make models
-    # vgg19 = MaskModel('vgg19', num_classes, pretrained=True)
-    # resnet18 = MaskModel('resnet18', num_classes, pretrained=True)
-    # googlenet = MaskModel('googlenet', num_classes, pretrained=True)
-    # densenet121 = MaskModel('densenet121', num_classes, pretrained=True)
-    resnet101 = MaskModel('resnet101', num_classes, pretrained=True)
+    # -- original + transformed => train_set
+    train_set = ConcatDataset([train_set, first_transformed_train_set, second_transformed_train_set])
+    print(' ============ final dataset : ', len(train_set))
 
-    ############################## freezing doesn't work well ##############################
-    # for param in resnet101.model.parameters():
-    #     param.grad_requires = False
+    # -- train general or k-fold
+    if args.fold_flag:
+        label_list = get_label_list(train_set)
+        fold_train(train_set, test_set, save_dir, dataset_module, num_classes, label_list, args)
+    else:
+        general_train(train_set, val_set, test_set, save_dir, dataset_module, num_classes, args)
 
-    # resnet101.model.fc = nn.Linear(in_features=resnet101.model.fc.in_features, out_features=num_classes, bias=True)
-    # nn.init.xavier_uniform_(resnet101.model.fc.weight)
-    ############################## freezing doesn't work well ##############################
+# K-Fold CV
+def fold_train(train_set, test_set, save_dir, dataset_module, num_classes, label_list, args):
+    # kfold = StratifiedKFold(n_splits=args.k_folds, shuffle=True, random_state=43)
+    kfold = KFold(n_splits=args.k_folds, shuffle=True, random_state=43)
 
-    # models = [vgg19, resnet50, googlenet, densenet121]
+    print(' --- K-Fold Start --- ')
+    for fold_num, (train_idx, val_idx) in enumerate(kfold.split(train_set)):
+        # new_train_set = Subset(train_set, train_idx)
+        # new_val_set = Subset(train_set, val_idx)
 
-    training(num_epochs, resnet101.model, 'resnet101_freezing', loaders, dataset_sizes, device, mask_test_origin)
-    test_prediction(resnet101.model, 'resnet101_freezing', device, loaders['test'], mask_test_origin)
+        train_sampler = SubsetRandomSampler(train_idx)
+        valid_sampler = SubsetRandomSampler(val_idx)
+        len_valid = len(val_idx)
 
-    # training models
-    # for m in models:
-    #     training(num_epochs, m.model, m.model_name, loaders, dataset_sizes, device, mask_test_origin)
-    
-    # ensemble(models, num_classes, device, loaders['test'], mask_test_origin)
+        train_loader = DataLoader(train_set, batch_size=args.batch_size, num_workers=multiprocessing.cpu_count() // 2, pin_memory=True, sampler=train_sampler)
+        val_loader = DataLoader(train_set, batch_size=args.batch_size, num_workers=multiprocessing.cpu_count() // 2, pin_memory=True, sampler=valid_sampler)
+        test_loader = DataLoader(test_set, batch_size=args.batch_size, num_workers=multiprocessing.cpu_count() // 2, pin_memory=True)
 
-# ================================================================================================
+        print(' ============ (K-Fold) train loader length : ', len(train_loader))
+        print(' ============ (K-Fold) val loader length : ', len(val_loader))
+        print(' ============ (K-Fold) test loader length : ', len(test_loader))
 
-# ensemble
-def ensemble(models, num_classes, device, test_loader, mask_test_origin):
-    print('=============== Start Ensemble ===============')
-    ensemble_model = EnsembleModel(models, num_classes, device)
-    ensemble_model.to(device)
-    test_prediction(ensemble_model, 'ensemble', device, test_loader, mask_test_origin)
+        # -- training
+        train_model(train_loader, val_loader, test_loader, len_valid, save_dir, args, dataset_module, num_classes, fold_num=fold_num + 1)
+        print(f' --- K-Fold_{fold_num + 1} End --- ')
 
-# ================================================================================================
+# General
+def general_train(train_set, val_set, test_set, save_dir, dataset_module, num_classes, args):
+    use_cuda = torch.cuda.is_available()
 
-# training
-def training(num_epochs, model, model_name, loaders, dataset_sizes, device, mask_test_origin):
+    # -- elderly increase is True
+    if args.age_flag:
+        # --- elderly dataset
+        elderly_dataset_module = getattr(import_module("dataset"), args.dataset)  # default: MaskBaseDataset
+        elderly_dataset = elderly_dataset_module(
+            data_dir=data_dir,
+            val_ratio=args.val_ratio,
+            task_type=args.task_type,
+            age_flag=args.age_flag
+        )
 
-    print('=============== Start Training ===============')
-    
-    # ============================
-    # for viz
-    # ============================
-    losses = {'train':[], 'val':[]}
-    accuracies = {'train':[], 'val':[]}
-    lr = []
-    
-    model.to(device)
-    criterion = nn.CrossEntropyLoss().to(device)
+        print(' ============ elderly dataset : ', len(elderly_dataset))
 
-    # ============================
-    # optimizers
-    # ============================
-    # optimizer = torch.optim.Adam(model.parameters(), lr=0.1)
-    # optimizer = torch.optim.Adam(model.fc.parameters(), lr=0.001, eps=1e-08)
-    optimizer = torch.optim.SGD(model.fc.parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4)
+        elderly_dataset.set_transform(transform, True)
+        elderly_train_set, elderly_val_set = elderly_dataset.split_dataset()
+        elderly_val_set, elderly_test_set = train_test_split(elderly_val_set, test_size=0.5, shuffle=True, random_state=43)
 
-    # ============================
-    # schedulers
-    # ============================
-    # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.1, patience=3, verbose=True)
-    # scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, 0.1, epochs=epochs, steps_per_epoch=len(loaders['train']), cycle_momentum=True)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 3, gamma=0.5)
+        train_set = ConcatDataset([train_set, elderly_train_set])
+        val_set = ConcatDataset([val_set, elderly_val_set])
+        test_set = ConcatDataset([test_set, elderly_test_set])
 
-    # time tracking
-    since = time.time()
+    train_loader = DataLoader(
+        train_set,
+        batch_size=args.batch_size,
+        num_workers=multiprocessing.cpu_count() // 2,
+        shuffle=True,
+        pin_memory=use_cuda,
+        # drop_last=True
+        # sampler=weighted_sampler
+    )
 
-    # init
-    best_model = copy.deepcopy(model.state_dict())
-    best_acc = 0.0
+    print(' ============ train loader length : ', len(train_loader))
 
-    for epoch in range(num_epochs):
-        for phase in ['train', 'val']:
-            if phase == 'train':
-                model.train()
+    val_loader = DataLoader(
+        val_set,
+        batch_size=args.valid_batch_size,
+        num_workers=multiprocessing.cpu_count() // 2,
+        shuffle=False,
+        pin_memory=use_cuda,
+        # drop_last=True
+    )
+
+    print(' ============ val loader length : ', len(val_loader))
+
+    # test set for prediction and score
+    test_loader = DataLoader(
+        test_set,
+        batch_size=args.valid_batch_size,
+        num_workers=multiprocessing.cpu_count() // 2,
+        shuffle=False,
+        pin_memory=use_cuda,
+    )
+
+    print(' ============ test loader length : ', len(test_loader))
+    len_valid = len(val_set)
+
+    # -- training
+    train_model(train_loader, val_loader, test_loader, len_valid, save_dir, args, dataset_module, num_classes)
+
+# Real Training
+def train_model(train_loader, val_loader, test_loader, len_valid, save_dir, args, dataset_module, num_classes=18, fold_num=1):
+    global std, mean
+
+    # -- settings
+    use_cuda = torch.cuda.is_available()
+    device = torch.device("cuda" if use_cuda else "cpu")
+
+    # -- model
+    model_module = getattr(import_module("model"), args.model)  # default: MyModel
+    model = model_module(
+        model_name=args.model_name
+    ).to(device)
+
+    model = model.model
+
+    # --- init params
+    init_fc_params(model)
+
+    # --- freezing strategy
+    # init_freezing(model)
+
+    # --- model summary
+    summary(model, (3, args.img_height, args.img_width))
+    model = torch.nn.DataParallel(model)
+
+    # -- loss & metric
+    criterion = create_criterion(args.criterion)  # default: cross_entropy
+    opt_module = getattr(import_module("torch.optim"), args.optimizer)  # default: SGD
+    optimizer = opt_module(
+        filter(lambda p: p.requires_grad, model.parameters()),
+        lr=args.lr,
+        weight_decay=5e-4
+    )
+    scheduler = StepLR(optimizer, args.lr_decay_step, gamma=0.9)
+
+    # -- logging
+    logger = SummaryWriter(log_dir=save_dir)
+    with open(os.path.join(save_dir, 'config.json'), 'w', encoding='utf-8') as f:
+        json.dump(vars(args), f, ensure_ascii=False, indent=4)
+
+    best_val_acc = 0
+    best_val_loss = np.inf
+    for epoch in range(args.epochs):
+
+        # train loop
+        model.train()
+        loss_value = 0
+        matches = 0
+        for idx, train_batch in enumerate(train_loader):
+            inputs, labels = train_batch
+            inputs = inputs.to(device)
+            labels = labels.to(device)
+
+            optimizer.zero_grad()
+
+            outs = model(inputs)
+            preds = torch.argmax(outs, dim=-1)
+            loss = criterion(outs, labels)
+
+            loss.backward()
+            optimizer.step()
+
+            loss_value += loss.item()
+            matches += (preds == labels).sum().item()
+            if (idx + 1) % args.log_interval == 0:
+                train_loss = loss_value / args.log_interval
+                train_acc = matches / args.batch_size / args.log_interval
+                current_lr = get_lr(optimizer)
+
+                print(
+                    f"Epoch[{epoch + 1}/{args.epochs}]({idx + 1}/{len(train_loader)}) || "
+                    f"training loss {train_loss:4.4} || training accuracy {train_acc:4.2%} || lr {current_lr}"
+                )
+
+                logger.add_scalar("Train/loss", train_loss, epoch * len(train_loader) + idx)
+                logger.add_scalar("Train/accuracy", train_acc, epoch * len(train_loader) + idx)
+
+                loss_value = 0
+                matches = 0
+
+        # each epoch
+        scheduler.step()
+
+        # val loop
+        with torch.no_grad():
+            print("[Info] --- Calculating Validation Result ---")
+            model.eval()
+            val_loss_items = []
+            val_acc_items = []
+            figure = None
+
+            for val_batch in val_loader:
+                inputs, labels = val_batch
+                inputs = inputs.to(device)
+                labels = labels.to(device)
+
+                outs = model(inputs)
+                preds = torch.argmax(outs, dim=-1)
+
+                loss_item = criterion(outs, labels).item()
+                acc_item = (labels == preds).sum().item()
+                val_loss_items.append(loss_item)
+                val_acc_items.append(acc_item)
+
+                if figure is None:
+                    inputs_np = torch.clone(inputs).detach().cpu().permute(0, 2, 3, 1).numpy()
+                    inputs_np = dataset_module.denormalize_image(inputs_np, mean, std)
+                    figure = grid_image(
+                        inputs_np, labels, preds, n=16, shuffle=args.dataset != "MaskSplitByProfileDataset"
+                    )
+
+            val_loss = np.sum(val_loss_items) / len(val_loader)
+            val_acc = np.sum(val_acc_items) / len_valid
+
+            if args.early_stopping and val_loss >= best_val_loss:
+                print(' --- Early Stopping ---')
+                break
+
+            best_val_loss = min(best_val_loss, val_loss)
+            if val_acc > best_val_acc:
+                print(f"New best model for val accuracy : {val_acc:4.2%}! saving the best model")
+
+                if not args.fold_flag:
+                    torch.save(model.state_dict(), f"{save_dir}/best.pth")
+                else:
+                    torch.save(model.state_dict(), f"{save_dir}/best_{fold_num}.pth")
+                best_val_acc = val_acc
+
+            if not args.fold_flag:
+                torch.save(model.state_dict(), f"{save_dir}/last.pth")
             else:
-                model.eval()
-        
-            running_loss = 0.0
-            running_corrects = 0.0
+                torch.save(model.state_dict(), f"{save_dir}/last_{fold_num}.pth")
+            print(
+                f"[Val] acc : {val_acc:4.2%}, loss: {val_loss:4.2} || "
+                f"best acc : {best_val_acc:4.2%}, best loss: {best_val_loss:4.2}"
+            )
+            logger.add_scalar("Val/loss", val_loss, epoch)
+            logger.add_scalar("Val/accuracy", val_acc, epoch)
+            logger.add_figure("results", figure, epoch)
+            print()
 
-            for inputs, labels in tqdm(loaders[phase]):
-                inputs, labels = inputs.to(device), labels.to(device)
-                optimizer.zero_grad()
-                
-                with torch.set_grad_enabled(phase == 'train'): # back prop only training
-                    outp = model(inputs)
-                    loss = criterion(outp, labels)
-                    _, pred = torch.max(outp, 1)
-            
-                    if phase == 'train':
-                        loss.backward()
-                        optimizer.step()
-                        # scheduler.step()
-                        # lr.append(scheduler.get_lr())
-
-                running_loss += loss.item() * inputs.size(0)            # per batch_size
-                running_corrects += torch.sum(pred == labels.data)      # per batch_size
-
-            if phase == 'train':
-                acc = 100. * running_corrects.double() / dataset_sizes[phase]
-                scheduler.step(acc)
-
-            epoch_loss = running_loss / dataset_sizes[phase]                        # per epoch
-            epoch_acc = 100. * running_corrects.double() / dataset_sizes[phase]     # per epoch
-
-            losses[phase].append(epoch_loss)
-            accuracies[phase].append(epoch_acc)
-
-            if phase == 'train':
-                print('Epoch : {} / {}'.format(epoch + 1, num_epochs))
-            print('{} - Loss : {:.4f}, Acc : {:.4f}%'.format(phase, epoch_loss, epoch_acc))
-            lr.append(scheduler._last_lr)
-            
-            if phase == 'val':
-                print('Training Time Spent : {}m {:.4f}s'.format((time.time() - since) // 60, (time.time() - since) % 60))
-            
-            # update best result
-            if phase == 'val' and epoch_acc > best_acc:
-                print('--- Update Best Model ---')
-                best_acc = epoch_acc
-                best_model = copy.deepcopy(model.state_dict())
-            
-            # dividing line
-            print('==' * 15)
-        
-        # early stopping
-        if not is_val_loss_decreasing(epoch, 3, losses['val']):
-            print('--- Early Stopping ---')
-            break
-
-    time_elapsed = time.time() - since
-    print('Whole Time Spent : {}m {:.4f}s'.format(time_elapsed // 60, time_elapsed % 60))
-
-    # load best model
-    model.load_state_dict(best_model)
-
-    # save model
-    root = './code/model'
-    torch.save(model, os.path.join(root, f'{model_name}_{best_acc}.pth'))
-
-    # inference
-    # test_prediction(model, model_name, device, loaders['test'], mask_test_origin)
+    # test prediction
+    test_prediction(model, test_loader, num_classes=num_classes)
 
 if __name__ == '__main__':
-    args = argparse.ArgumentParser(description='Mask Image Classification')
-    args.add_argument('-c', '--config', default=None, type=str,
-                      help='config file path (default: None)')
-    args.add_argument('-r', '--resume', default=None, type=str,
-                      help='path to latest checkpoint (default: None)')
-    args.add_argument('-d', '--device', default=None, type=str,
-                      help='indices of GPUs to enable (default: all)')
-    config = args.parse_args()
-    main(config)
+    parser = argparse.ArgumentParser()
+
+    from dotenv import load_dotenv
+    import os
+    load_dotenv(verbose=True)
+
+    # Data and model checkpoints directories
+    parser.add_argument('--seed', type=int, default=42, help='random seed (default: 42)')
+    parser.add_argument('--epochs', type=int, default=1, help='number of epochs to train (default: 1)')
+    parser.add_argument('--dataset', type=str, default='MaskBaseDataset', help='dataset augmentation type (default: MaskBaseDataset)')
+    parser.add_argument('--augmentation', type=str, default='BaseAugmentation', help='data augmentation type (default: BaseAugmentation)')
+    parser.add_argument("--resize", nargs="+", type=list, default=[224, 224], help='resize size for image when training')
+    parser.add_argument('--batch_size', type=int, default=64, help='input batch size for training (default: 64)')
+    parser.add_argument('--valid_batch_size', type=int, default=64, help='input batch size for validing (default: 1000)')
+    parser.add_argument('--model', type=str, default='MyModel', help='model type (default: MyModel)')
+
+    # -- add custom args
+    parser.add_argument('--model_name', type=str, default='resnet18', help='model detail type (default: resnet18)')
+    parser.add_argument('--early_stopping', type=int, default=1, help='early stopping flag (default: True)')
+    parser.add_argument('--img_width', type=int, default=200, help='image width to resize (default: 200)')
+    parser.add_argument('--img_height', type=int, default=250, help='image height to resize (default: 250)')
+    parser.add_argument('--task_type', type=str, default='all', help='task type whether is all or not (default: all)')
+    parser.add_argument('--age_flag', type=int, default=0, help='selection of age >= 60 (default: False)')
+    parser.add_argument('--fold_flag', type=int, default=0, help='fold flag (default: False)')
+    parser.add_argument('--k_folds', type=int, default=5, help='split ratio (default: 5)')
+    # parser.add_argument('--k_folds', type=int, default=5, help='split ratio (default: 5)')
+
+    parser.add_argument('--optimizer', type=str, default='SGD', help='optimizer type (default: SGD)')
+    parser.add_argument('--lr', type=float, default=1e-3, help='learning rate (default: 1e-3)')
+    parser.add_argument('--val_ratio', type=float, default=0.2, help='ratio for validaton (default: 0.2)')
+    parser.add_argument('--criterion', type=str, default='cross_entropy', help='criterion type (default: cross_entropy)')
+    parser.add_argument('--lr_decay_step', type=int, default=20, help='learning rate scheduler deacy step (default: 20)')
+    parser.add_argument('--log_interval', type=int, default=20, help='how many batches to wait before logging training status')
+    parser.add_argument('--name', default='exp', help='model save at {SM_MODEL_DIR}/{name}')
+
+    # Container environment
+    parser.add_argument('--train_data_dir', type=str, default=os.environ.get('SM_CHANNEL_TRAIN', '/opt/ml/input/data/train/images'))
+    parser.add_argument('--test_data_dir', type=str, default=os.environ.get('SM_CHANNEL_TRAIN', '/opt/ml/input/data/eval'))
+    parser.add_argument('--model_dir', type=str, default=os.environ.get('SM_MODEL_DIR', './model'))
+
+    args = parser.parse_args()
+    print(args)
+
+    data_dir = args.train_data_dir
+    model_dir = args.model_dir
+    common_train(data_dir, model_dir, args)
+
+    # inference
+    data_dir = args.test_data_dir
+    output_dir = '/opt/ml/input/data/eval/submission'
+    # inference(data_dir, model_dir, output_dir, args)
+    # inference_combine(output_dir, args)

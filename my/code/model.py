@@ -1,20 +1,47 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torchvision
-from torchvision.models.densenet import densenet121
-from torchvision.models.googlenet import googlenet
-from torchvision.models.vgg import vgg19
+import timm
+import math
 
-class MaskModel(nn.Module):
-    '''
-    A model selection for comparing each models
+from efficientnet_pytorch import EfficientNet
 
-    Args:
-        model_name(str): A model name
-        num_classes(int): A length of classes
-    '''
+class BaseModel(nn.Module):
+    def __init__(self, num_classes):
+        super().__init__()
+
+        self.conv1 = nn.Conv2d(3, 32, kernel_size=7, stride=1)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=1)
+        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, stride=1)
+        self.dropout1 = nn.Dropout(0.25)
+        self.dropout2 = nn.Dropout(0.25)
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.fc = nn.Linear(128, num_classes)
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = F.relu(x)
+
+        x = self.conv2(x)
+        x = F.relu(x)
+        x = F.max_pool2d(x, 2)
+        x = self.dropout1(x)
+
+        x = self.conv3(x)
+        x = F.relu(x)
+        x = F.max_pool2d(x, 2)
+        x = self.dropout2(x)
+
+        x = self.avgpool(x)
+        x = x.view(-1, 128)
+        return self.fc(x)
+
+
+# Custom Model Template
+class MyModel(nn.Module):
     def __init__(self, model_name, num_classes=18, pretrained=True) -> None:
-        super(MaskModel, self).__init__()
+        super(MyModel, self).__init__()
         self.pretrained = pretrained
         self.num_classes = num_classes
         self.model_name = model_name.lower()
@@ -35,6 +62,10 @@ class MaskModel(nn.Module):
                 self.model = self.get_googlenet()
             elif self.model_name == 'densenet121':
                 self.model = self.get_densenet121()
+            elif self.model_name == 'efficientnetb2':
+                self.model = self.get_efficientnetb2()
+            elif self.model_name == 'efficientnetb4':
+                self.model = self.get_efficientnetb4()
             else:
                 raise ValueError('(Model Not Found) Try Another Model')
         except ValueError as err_msg:
@@ -47,7 +78,13 @@ class MaskModel(nn.Module):
 
     def get_resnet18(self):
         resnet18 = torchvision.models.resnet18(pretrained=self.pretrained)
-        resnet18.fc = nn.Linear(in_features=resnet18.fc.in_features, out_features=self.num_classes, bias=True)
+        # resnet18.layer1.add_module(name='dropout', module=nn.Dropout2d(p=0.5))
+        # resnet18.layer2.add_module(name='dropout', module=nn.Dropout2d(p=0.5))
+
+        resnet18.fc = nn.Sequential(
+            nn.Dropout2d(p=0.2),
+            nn.Linear(in_features=resnet18.fc.in_features, out_features=self.num_classes, bias=True)
+        )
         return resnet18
 
     def get_resnet50(self):
@@ -70,29 +107,29 @@ class MaskModel(nn.Module):
         googlenet.fc = nn.Linear(in_features=googlenet.fc.in_features, out_features=self.num_classes, bias=True)
         return googlenet
 
+    def get_efficientnetb2(self):
+        efficientnetb2 = EfficientNet.from_pretrained('efficientnet-b2', num_classes=18)
+        return efficientnetb2
+
+    def get_efficientnetb4(self):
+        efficientnetb4 = EfficientNet.from_pretrained('efficientnet-b4', num_classes=18)
+        return efficientnetb4
+
     def get_densenet121(self):
         densenet121 = torchvision.models.densenet121(pretrained=self.pretrained)
-        densenet121.classifier = nn.Linear(in_features=densenet121.classifier.in_features, out_features=self.num_classes, bias=True)
+        densenet121.classifier = nn.Linear(in_features=densenet121.classifier.in_features,
+                                           out_features=self.num_classes, bias=True)
         return densenet121
 
 
-class EnsembleModel(nn.Module):
-    '''
-    This is ensemble class for improving score
-
-    Args:
-        models: A list of MaskModel
-        device(str): Cuda or CPU
-    '''
-    def __init__(self, models, num_classes=18, device='cuda'):
-        super(EnsembleModel, self).__init__()
-        self.models = nn.ModuleList([m.model for m in models])
+class Ensemble(nn.Module):
+    def __init__(self, device, models):
+        super(Ensemble, self).__init__()
         self.device = device
-        self.num_classes = num_classes
-    
-    # just input x into all model sequentially
+        self.models = nn.ModuleList(models)
+
     def forward(self, x):
-        output = torch.zeros([x.size(0), self.num_classes]).to(self.device)
+        output = torch.zeros([x.size(0), 3]).to(self.device)
         for model in self.models:
             output += model(x)
         return output
