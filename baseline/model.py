@@ -1,6 +1,10 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torchvision import models
+import math
+import gc
+from efficientnet_pytorch import EfficientNet
 
 
 class BaseModel(nn.Module):
@@ -34,7 +38,69 @@ class BaseModel(nn.Module):
         return self.fc(x)
 
 
-# Custom Model Template
+# Custom Resnet18
+class Resnet18T2142(nn.Module):
+    def __init__(self, num_classes):
+        super().__init__()
+        resnet18 = models.resnet18(pretrained=True)
+
+        resnet18.fc = torch.nn.Linear(in_features=512, out_features=num_classes, bias=True)
+
+        torch.nn.init.xavier_uniform_(resnet18.fc.weight)
+        stdv = 1/math.sqrt(512)
+        resnet18.fc.bias.data.uniform_(-stdv, stdv)
+        self.net = resnet18
+    def forward(self, x):
+        out = self.net(x)
+        return out
+
+class Resnext50T2142(nn.Module):
+    def __init__(self, num_classes):
+        super().__init__()
+        resnext50 = torch.hub.load('pytorch/vision:v0.8.0', 'resnext50_32x4d', pretrained=True)
+        print(resnext50)
+        resnext50.fc = torch.nn.Linear(in_features=2048 ,out_features=num_classes , bias=True)
+
+        torch.nn.init.xavier_uniform_(resnext50.fc.weight)
+        stdv = 1/math.sqrt(2048)
+        resnext50.fc.bias.data.uniform_(-stdv, stdv)
+        self.net = resnext50
+
+    def forward(self, x):
+        """
+        1. 위에서 정의한 모델 아키텍쳐를 forward propagation 을 진행해주세요
+        2. 결과로 나온 output 을 return 해주세요
+        """
+        return self.net(x)
+
+class Resnext101T2142(nn.Module):
+    def __init__(self, num_classes):
+        super().__init__()
+        resnext101 = torch.hub.load('pytorch/vision:v0.8.0', 'resnext101_32x8d', pretrained=True)
+        print(resnext101)
+        resnext101.fc = torch.nn.Linear(in_features=2048 ,out_features=num_classes , bias=True)
+
+        torch.nn.init.xavier_uniform_(resnext101.fc.weight)
+        stdv = 1/math.sqrt(2048)
+        resnext101.fc.bias.data.uniform_(-stdv, stdv)
+        self.net = resnext101
+
+    def forward(self, x):
+        """
+        1. 위에서 정의한 모델 아키텍쳐를 forward propagation 을 진행해주세요
+        2. 결과로 나온 output 을 return 해주세요
+        """
+        return self.net(x)
+
+class EfficientnetB4(nn.Module):
+    def __init__(self, num_classes):
+        super().__init__()
+        efficientnetb0 = EfficientNet.from_pretrained('efficientnet-b4', num_classes=num_classes)
+        self.net = efficientnetb0
+
+    def forward(self, x):
+        return self.net(x)
+    
 class MyModel(nn.Module):
     def __init__(self, num_classes):
         super().__init__()

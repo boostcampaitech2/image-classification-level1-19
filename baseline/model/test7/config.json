@@ -1,0 +1,22 @@
+{
+    "seed": 42,
+    "epochs": 40,
+    "dataset": "MaskBaseDatasetT2142",
+    "augmentation": "CustomAugmentationT2142",
+    "resize": [
+        224,
+        224
+    ],
+    "batch_size": 128,
+    "valid_batch_size": 128,
+    "model": "Resnext50T2142",
+    "optimizer": "AdamW",
+    "lr": 0.001,
+    "val_ratio": 0.2,
+    "criterion": "focal",
+    "lr_decay_step": 20,
+    "log_interval": 20,
+    "name": "test7",
+    "data_dir": "/opt/ml/input/data/train/images",
+    "model_dir": "./model"
+}

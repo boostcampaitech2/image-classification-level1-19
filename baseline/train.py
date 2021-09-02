@@ -14,7 +14,7 @@ import torch
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-
+from sklearn.metrics import f1_score
 from dataset import MaskBaseDataset
 from loss import create_criterion
 
@@ -111,6 +111,16 @@ def train(data_dir, model_dir, args):
     # -- data_loader
     train_set, val_set = dataset.split_dataset()
 
+    train_set.dataset.set_transform(transform)
+
+    val_transform_module = getattr(import_module("dataset"), "BaseAugmentationT2142")
+    val_transform = val_transform_module(
+        resize=args.resize,
+        mean=dataset.mean,
+        std=dataset.std,
+    )
+    val_set.dataset.set_transform(val_transform)
+
     train_loader = DataLoader(
         train_set,
         batch_size=args.batch_size,
@@ -153,6 +163,7 @@ def train(data_dir, model_dir, args):
 
     best_val_acc = 0
     best_val_loss = np.inf
+    best_f1_score = 0
     for epoch in range(args.epochs):
         # train loop
         model.train()
@@ -191,6 +202,8 @@ def train(data_dir, model_dir, args):
         scheduler.step()
 
         # val loop
+        epoch_f1 = 0
+        n_iter = 0
         with torch.no_grad():
             print("Calculating validation results...")
             model.eval()
@@ -207,6 +220,10 @@ def train(data_dir, model_dir, args):
 
                 loss_item = criterion(outs, labels).item()
                 acc_item = (labels == preds).sum().item()
+
+                epoch_f1 += f1_score(labels.cpu().numpy(), preds.cpu().numpy(), average='macro')
+                n_iter += 1
+
                 val_loss_items.append(loss_item)
                 val_acc_items.append(acc_item)
 
@@ -219,20 +236,31 @@ def train(data_dir, model_dir, args):
 
             val_loss = np.sum(val_loss_items) / len(val_loader)
             val_acc = np.sum(val_acc_items) / len(val_set)
+
+            epoch_f1 /= n_iter
+
             best_val_loss = min(best_val_loss, val_loss)
             if val_acc > best_val_acc:
-                print(f"New best model for val accuracy : {val_acc:4.2%}! saving the best model..")
-                torch.save(model.module.state_dict(), f"{save_dir}/best.pth")
+            #    print(f"New best model for val accuracy : {val_acc:4.2%}! saving the best model..")
+            #    torch.save(model.module.state_dict(), f"{save_dir}/best.pth")
                 best_val_acc = val_acc
+
+            if epoch_f1 > best_f1_score:
+                print(f"New best model for f1 score : {epoch_f1:4.2%}! saving the best model..")
+                torch.save(model.module.state_dict(), f"{save_dir}/best.pth")
+                best_f1_score = epoch_f1
+            
             torch.save(model.module.state_dict(), f"{save_dir}/last.pth")
             print(
                 f"[Val] acc : {val_acc:4.2%}, loss: {val_loss:4.2} || "
-                f"best acc : {best_val_acc:4.2%}, best loss: {best_val_loss:4.2}"
+                f"best acc : {best_val_acc:4.2%}, best loss: {best_val_loss:4.2} || "
+                f"F1 score : {epoch_f1:4.2%}, best F1 score: {best_f1_score:4.2}"
             )
             logger.add_scalar("Val/loss", val_loss, epoch)
             logger.add_scalar("Val/accuracy", val_acc, epoch)
             logger.add_figure("results", figure, epoch)
             print()
+
 
 
 if __name__ == '__main__':
@@ -247,7 +275,7 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', type=int, default=1, help='number of epochs to train (default: 1)')
     parser.add_argument('--dataset', type=str, default='MaskBaseDataset', help='dataset augmentation type (default: MaskBaseDataset)')
     parser.add_argument('--augmentation', type=str, default='BaseAugmentation', help='data augmentation type (default: BaseAugmentation)')
-    parser.add_argument("--resize", nargs="+", type=list, default=[128, 96], help='resize size for image when training')
+    parser.add_argument("--resize", nargs="+", type=list, default=[224, 224], help='resize size for image when training')
     parser.add_argument('--batch_size', type=int, default=64, help='input batch size for training (default: 64)')
     parser.add_argument('--valid_batch_size', type=int, default=1000, help='input batch size for validing (default: 1000)')
     parser.add_argument('--model', type=str, default='BaseModel', help='model type (default: BaseModel)')
