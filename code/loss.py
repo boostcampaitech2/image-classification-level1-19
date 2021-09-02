@@ -46,7 +46,6 @@ class F1_Loss(nn.Module):
         f1 = f1.clamp(min=self.epsilon, max=1-self.epsilon)
         return 1 - f1.mean()
 
-
 class LabelSmoothingLoss(nn.Module):
     def __init__(self, classes, smoothing=0.0, dim=-1):
         super(LabelSmoothingLoss, self).__init__()
@@ -64,14 +63,11 @@ class LabelSmoothingLoss(nn.Module):
             true_dist.scatter_(1, target.data.unsqueeze(1), self.confidence)
         return torch.mean(torch.sum(-true_dist * pred, dim=self.dim))
 
-def cross_entropy_loss():
-    return nn.CrossEntropyLoss()
-
 def create_criterion(name):
     loss_dict={
         'focal': FocalLoss,
         'f1': F1_Loss,
         'smoothing': LabelSmoothingLoss,
-        'ce':cross_entropy_loss,
+        'ce':nn.CrossEntropyLoss,
     }
     return loss_dict[name]()
