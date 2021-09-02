@@ -71,7 +71,7 @@ def increment_path(path, exist_ok=False):
         n = max(i) + 1 if i else 2
         return f"{path}{n}"
 
-def k_fold_train(data_dir, model_dri, args):
+def k_fold_train(data_dir, model_dir, args):
 
     s = "{:=^100}".format(" start k-fold training ")
     print(s)
@@ -186,50 +186,49 @@ def k_fold_train(data_dir, model_dri, args):
                         loss_value = 0
                         matches = 0
 
-            scheduler.step()
+                scheduler.step()
 
-            # val loop
-            with torch.no_grad():
-                print("Calculating validation result...")
-                model.eval()
-                val_loss_items = []
-                val_acc_items = []
+                # val loop
+                with torch.no_grad():
+                    print("Calculating validation result...")
+                    model.eval()
+                    val_loss_items = []
+                    val_acc_items = []
 
-                for val_batch in val_loader:
-                    inputs, labels = val_batch
-                    inputs = inputs.to(device)
-                    labels = labels.to(device)
+                    for val_batch in val_loader:
+                        inputs, labels = val_batch
+                        inputs = inputs.to(device)
+                        labels = labels.to(device)
 
-                    outs = model(inputs)
-                    preds = torch.argmax(outs, dim=-1)
+                        outs = model(inputs)
+                        preds = torch.argmax(outs, dim=-1)
 
-                    loss_item = criterion(outs, labels).item()
-                    acc_item = (labels == preds).sum().item()
-                    val_loss_items.append(loss_item)
-                    val_acc_items.append(acc_item)
+                        loss_item = criterion(outs, labels).item()
+                        acc_item = (labels == preds).sum().item()
+                        val_loss_items.append(loss_item)
+                        val_acc_items.append(acc_item)
 
-                val_loss = np.sum(val_loss_items) / len(val_loader)
-                val_acc = np.sum(val_acc_items) / len(valid_idx)
-                best_val_loss = min(best_val_loss, val_loss)
+                    val_loss = np.sum(val_loss_items) / len(val_loader)
+                    val_acc = np.sum(val_acc_items) / len(valid_idx)
+                    best_val_loss = min(best_val_loss, val_loss)
 
-                if val_acc > best_val_acc:
-                    best_val_acc = val_acc
-                    print(f"New best model for val accuracy ! : {val_acc:4.2%} saving the best model ...")
-                    torch.save(model, f"{save_dir}/{task}_{i:02}_{epoch:03}_{val_acc:4.2%}_{val_loss:4.2}.pt")
-                    counter = 0
-                else:
-                    counter += 1
-                
-                print(
-                    f"current val acc : {val_acc:4.2%}, loss: {val_loss:4.2} || "
-                    f"best  val acc : {best_val_acc:4.2%}"
-                )
-                if args.early_stop and counter == args.patience:
-                    print("early stopping")
-                    print(f"best acc: {best_val_acc:4.2%}") 
+                    if val_acc > best_val_acc:
+                        best_val_acc = val_acc
+                        print(f"New best model for val accuracy ! : {val_acc:4.2%} saving the best model ...")
+                        torch.save(model, f"{save_dir}/{task}_{i:02}_{epoch:03}_{val_acc:4.2%}_{val_loss:4.2}.pt")
+                        counter = 0
+                    else:
+                        counter += 1
+                    
+                    print(
+                        f"current val acc : {val_acc:4.2%}, loss: {val_loss:4.2} || "
+                        f"best  val acc : {best_val_acc:4.2%}"
+                    )
+                    if args.early_stop and counter == args.patience:
+                        print("early stopping")
+                        print(f"best acc: {best_val_acc:4.2%}") 
 
-                    break
-
+                        break
 
 def general_train(data_dir, model_dir, args):
     s = "{:=^100}".format(" start general training ")
