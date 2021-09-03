@@ -8,8 +8,8 @@ P-Stage level-1 image classification competition. (shape of wearing mask, gender
 ```
 input/
 ├── data/
-│ ├── eval - evaluation dataset
-│ └── train - train dataset
+│ ├── eval
+│ └── train
 code/
 ├── train.py
 ├── inference.py
