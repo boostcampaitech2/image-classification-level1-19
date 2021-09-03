@@ -37,7 +37,7 @@ code/
 
 `pip install -r requirements.txt` : install the necessary packages.
 
-## Hadware
+### Hadware
 - CPU: Intel(R) Xeon(R) Gold 5220 CPU @ 2.20GHz
 - GPU: Tesla V100-SXM2-32GB
 
