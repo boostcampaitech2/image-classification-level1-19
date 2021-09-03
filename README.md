@@ -34,6 +34,8 @@ code/
 - Linux version 4.4.0-59-generic
 - Python >= 3.8.5
 - PyTorch >= 1.7.1
+- conda >= 4.9.2
+- tensorboard >= 2.4.1
 
 `pip install -r requirements.txt` : install the necessary packages.
 
