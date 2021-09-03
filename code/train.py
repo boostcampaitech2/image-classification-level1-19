@@ -1,22 +1,18 @@
 import argparse
 import glob
 import json
-import multiprocessing
 import os
 import random
 import re
+from sklearn.metrics import f1_score
 from importlib import import_module
 from pathlib import Path
 
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-
-from dataset import MaskBaseDataset
-from loss import create_criterion
 
 SEED = 123
 
@@ -56,7 +52,6 @@ def get_dataloader(dataset, train_idx, valid_idx, args):
 
 def increment_path(path, exist_ok=False):
     """ Automatically increment path, i.e. runs/exp --> runs/exp0, runs/exp1 etc.
-
     Args:
         path (str or pathlib.Path): f"{model_dir}/{args.name}".
         exist_ok (bool): whether increment path (increment if False).
@@ -148,6 +143,7 @@ def k_fold_train(data_dir, model_dir, args):
             best_val_acc = 0
             best_val_loss = np.inf
             counter = 0
+            best_f1 = 0
 
             for epoch in range(args.epochs):
 
@@ -155,6 +151,9 @@ def k_fold_train(data_dir, model_dir, args):
                 model.train()
                 loss_value = 0
                 matches = 0
+                epoch_f1 = 0
+                n_iter = 0
+
                 for idx, train_batch in enumerate(train_loader):
                     inputs, labels = train_batch
                     inputs = inputs.to(device)
@@ -165,10 +164,13 @@ def k_fold_train(data_dir, model_dir, args):
                     loss = criterion(outs, labels)
 
                     loss.backward()
+                    # -- Gradient Accumulation
                     if (idx+1) % accumulation_step == 0:
                         optimizer.step()
                         optimizer.zero_grad()
                     
+                    epoch_f1 += f1_score(labels.cpu().numpy(),preds.cpu().numpy(),average='macro')
+                    n_iter += 1
                     loss_value += loss.item()
                     matches += (preds==labels).sum().item()
 
@@ -177,9 +179,9 @@ def k_fold_train(data_dir, model_dir, args):
                         train_acc = matches / args.batch_size / args.log_interval
                         current_lr = get_lr(optimizer)
                         print(
-                            f"Epoch[{epoch}/{args.epochs}]({idx + 1}/{len(train_loader)}) || "
-                            f"training loss {train_loss:4.4} || training accuracy {train_acc:4.2%} || lr {current_lr}"
-                        )
+                    f"Epoch[{epoch}/{args.epochs}]({idx + 1}/{len(train_loader)}) || "
+                    f"training loss {train_loss:4.4} || training accuracy {train_acc:4.2%} ||training-f1 {epoch_f1/n_iter:.4f}|| lr {current_lr}"
+                )
                         logger.add_scalar("Train/loss", train_loss, epoch * len(train_loader) + idx)
                         logger.add_scalar("Train/accuracy", train_acc, epoch * len(train_loader) + idx)
 
@@ -195,6 +197,9 @@ def k_fold_train(data_dir, model_dir, args):
                     val_loss_items = []
                     val_acc_items = []
 
+                    epoch_f1 = 0
+                    n_iter = 0
+
                     for val_batch in val_loader:
                         inputs, labels = val_batch
                         inputs = inputs.to(device)
@@ -208,6 +213,10 @@ def k_fold_train(data_dir, model_dir, args):
                         val_loss_items.append(loss_item)
                         val_acc_items.append(acc_item)
 
+                        epoch_f1 += f1_score(labels.cpu().numpy(), preds.cpu().numpy(), average='macro')
+                        n_iter += 1
+
+                    epoch_f1 = epoch_f1/n_iter
                     val_loss = np.sum(val_loss_items) / len(val_loader)
                     val_acc = np.sum(val_acc_items) / len(valid_idx)
                     best_val_loss = min(best_val_loss, val_loss)
@@ -221,8 +230,8 @@ def k_fold_train(data_dir, model_dir, args):
                         counter += 1
                     
                     print(
-                        f"current val acc : {val_acc:4.2%}, loss: {val_loss:4.2} || "
-                        f"best  val acc : {best_val_acc:4.2%}"
+                        f"current val acc : {val_acc:4.2%}, loss: {val_loss:4.2} ,f1_score : {epoch_f1:.4f}|| "
+                        f"best  val acc : {best_val_acc:4.2%}, best loss: {best_val_loss:4.2} , best_f1_score : {best_f1:.4f}"
                     )
                     if args.early_stop and counter == args.patience:
                         print("early stopping")
@@ -313,12 +322,15 @@ def general_train(data_dir, model_dir, args):
         best_val_acc = 0
         best_val_loss = np.inf
         counter = 0
+        best_f1 = 0
         for epoch in range(args.epochs):
 
             # train loop
             model.train()
             loss_value = 0
             matches = 0
+            epoch_f1 = 0
+            n_iter = 0
             for idx, train_batch in enumerate(train_loader):
                 inputs, labels = train_batch
                 inputs = inputs.to(device)
@@ -333,6 +345,8 @@ def general_train(data_dir, model_dir, args):
                 loss.backward()
                 optimizer.step()
 
+                epoch_f1 += f1_score(labels.cpu().numpy(),preds.cpu().numpy(),average='macro')
+                n_iter += 1
                 loss_value += loss.item()
                 matches += (preds == labels).sum().item()
                 if (idx + 1)% args.log_interval == 0:
@@ -340,9 +354,9 @@ def general_train(data_dir, model_dir, args):
                     train_acc = matches / args.batch_size / args.log_interval
                     current_lr = get_lr(optimizer)
                     print(
-                        f"Epoch[{epoch}/{args.epochs}]({idx + 1}/{len(train_loader)}) || "
-                        f"training loss {train_loss:4.4} || training accuracy {train_acc:4.2%} || lr {current_lr}"
-                    )
+                    f"Epoch[{epoch}/{args.epochs}]({idx + 1}/{len(train_loader)}) || "
+                    f"training loss {train_loss:4.4} || training accuracy {train_acc:4.2%} ||training-f1 {epoch_f1/n_iter:.4f}|| lr {current_lr}"
+                )
                     logger.add_scalar("Train/loss", train_loss, epoch * len(train_loader) + idx)
                     logger.add_scalar("Train/accuracy", train_acc, epoch * len(train_loader) + idx)
 
@@ -357,7 +371,9 @@ def general_train(data_dir, model_dir, args):
                 model.eval()
                 val_loss_items = []
                 val_acc_items = []
-                figure = None
+                epoch_f1 = 0
+                n_iter = 0
+
                 for val_batch in val_loader:
                     inputs, labels = val_batch
                     inputs = inputs.to(device)
@@ -370,6 +386,9 @@ def general_train(data_dir, model_dir, args):
                     acc_item = (labels == preds).sum().item()
                     val_loss_items.append(loss_item)
                     val_acc_items.append(acc_item)
+
+                    epoch_f1 += f1_score(labels.cpu().numpy(), preds.cpu().numpy(), average='macro')
+                    n_iter += 1
                 
                 val_loss = np.sum(val_loss_items) / len(val_loader)
                 val_acc = np.sum(val_acc_items) / len(val_set)
@@ -384,9 +403,9 @@ def general_train(data_dir, model_dir, args):
                     counter += 1
 
                 print(
-                    f"current val acc : {val_acc:4.2%}, loss: {val_loss:4.2} || "
-                    f"best  val acc : {best_val_acc:4.2%}"
-                )
+                        f"current val acc : {val_acc:4.2%}, loss: {val_loss:4.2} ,f1_score : {epoch_f1:.4f}|| "
+                        f"best  val acc : {best_val_acc:4.2%}, best loss: a{best_val_loss:4.2} , best_f1_score : {best_f1:.4f}"
+                    )
                 if args.early_stop and counter >= args.patience:
                     print("early stopping")
                     print(f"best acc: {best_val_acc:4.2%}") 
