@@ -49,5 +49,5 @@ code/
 
 # Inference
 ```python inference.py --model_dir {'MODEL_PATH'}```
-ex. <br>
+<br>ex. <br>
 `python inference.py --model_dir "./models/exp1"`
