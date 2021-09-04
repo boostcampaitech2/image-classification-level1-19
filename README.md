@@ -28,7 +28,9 @@ code/
 - `code/evaluation.py`: function to score, matric
 - `code/loss.py`: contains loss functions
 - `code/model.py`: contains custom or pre-trained model
-- `model/`: trained models are saved here like(exp1, exp2,...)
+- `model/`: trained models are saved here like(exp1, exp2,...) <br>
+
+![프로젝트구조](https://user-images.githubusercontent.com/51802825/132090875-9e87a068-8f29-4cd9-928f-cd0af5b47adc.png)
 
 # Requirements
 - Linux version 4.4.0-59-generic
