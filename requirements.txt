@@ -1,0 +1,3 @@
+efficientnet-pytorch==0.7.1
+GPUtil==1.4.0
+timm==0.4.12

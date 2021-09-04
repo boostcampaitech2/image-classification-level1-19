@@ -19,7 +19,6 @@ IMG_EXTENSIONS = [
     ".PNG", ".ppm", ".PPM", ".bmp", ".BMP",
 ]
 
-
 def is_image_file(filename):
     return any(filename.endswith(extension) for extension in IMG_EXTENSIONS)
 
@@ -193,7 +192,7 @@ class MaskBaseDataset(Dataset):
             'gender':int(gender_label),
             'age':int(age_label),
         }
-        if self.class_by is not None:
+        if self.class_by is not None: # code for a multiple model 
             multi_class_label = by[self.class_by]
 
         image_transform = self.transform(image)

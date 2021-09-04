@@ -21,13 +21,9 @@ def resnet18(classes):
 
 def resnet34(classes):
     resnet34 = torchvision.models.resnet34(pretrained=True)
-    #resnet34.conv1 = nn.Conv2d(classes, 64, kernel_size=(7,7), stride=(2,2), padding=(3,3), bias=False)
     resnet34.fc = nn.Linear(in_features=512, out_features=classes, bias=True)
     nn.init.xavier_uniform_(resnet34.conv1.weight)
     nn.init.xavier_uniform_(resnet34.fc.weight)
-
-    # nn.init.kaiming_uniform_(resnet34.conv1.weight, mode='fan_out', nonlinearity='relu')
-    # nn.init.normal_(resnet34.fc.weight, 0, 0.01)
 
     stdv = 1.0/np.sqrt(classes)
     resnet34.fc.bias.data.uniform_(-stdv, stdv)
@@ -134,7 +130,16 @@ def efficientnet_b7(classes):
     effnet = EfficientNet.from_pretrained('efficientnet-b7', num_classes=classes)
     return effnet
 
-def get_model(model_name:str, classes):
+def get_model(model_name:str, classes:int):
+    """[summary]
+
+    Args:
+        model_name (str): [name for a pre-trained model]
+        classes (int): [output channels of called pre-trained model]
+
+    Returns:
+        [nn.Module]: [description]
+    """
     model_dict = {
         'resnet18':resnet18,
         'resnet34':resnet34,
