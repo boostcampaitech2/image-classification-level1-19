@@ -9,29 +9,32 @@ from torch.utils.data import DataLoader
 
 from dataset import TestDataset, MaskBaseDataset
 
-# def load_model(saved_model, num_classes, device):
-#     model_cls = getattr(import_module("model"), args.model)
-#     model = model_cls(
-#         num_classes=num_classes
-#     )
-
-#     # tarpath = os.path.join(saved_model, 'best.tar.gz')
-#     # tar = tarfile.open(tarpath, 'r:gz')
-#     # tar.extractall(path=saved_model)
-
-#     model_path = os.path.join(saved_model, 'best.pth')
-#     model.load_state_dict(torch.load(model_path, map_location=device))
-
-#     return model
 def encode_multi_class(mask_label, gender_label, age_label) -> int:
     return mask_label * 6 + gender_label * 3 + age_label
 
 def get_info(model):
+    """ This returns number of fold and accuracy from model's 'file name' using split function
+
+    Args:
+        model (str): stored file name of model
+
+    Returns:
+        [int]: number of folds
+        [float]: accuracy for a model
+    """
     task, k, epoch, acc, loss = model.split('_') # task, k-fold split, epoch, accuracy, loss
     acc = acc.replace("%", "")
     return int(k), float(acc)
 
 def is_single(args):
+    """ This checks whether it 'multi model' or 'single model'
+
+    Args:
+        args (json): initialized arguments
+
+    Returns:
+        bool: Returns 'True' for multiple models, 'False' otherwise.
+    """
     tasks = []
     model_list = [model for model in os.listdir(args.model_dir) if not model.startswith('.')]
     model_list = [model for model in model_list if model.endswith('pt')]
@@ -44,6 +47,14 @@ def is_single(args):
     return True if 'multi' in tasks else False
 
 def get_n_splits(args):
+    """ Calculate 'split number of k-fold' from the file name.
+
+    Args:
+        args (json): initialized arguments
+
+    Returns:
+        int: n_splits
+    """
     n_split=0
     model_list = [model for model in os.listdir(args.model_dir) if not model.startswith('.')]
     model_list = [model for model in model_list if model.endswith('pt')]
@@ -54,6 +65,16 @@ def get_n_splits(args):
     return n_split + 1
 
 def get_best_models(task, args):
+    """Returns the file name with the highest accuracy at each 'n_split(k)'
+
+
+    Args:
+        task (str): task of model ex) 'mask', 'age', 'gender', 'multi'
+        args (json): initialized arguments
+
+    Returns:
+        list: best model file names
+    """
     model_list = [model for model in os.listdir(args.model_dir) if model.startswith(task)]
     best_model = {}
     for model in model_list:
@@ -92,7 +113,7 @@ def inference(data_dir, model_dir, output_dir, args):
         drop_last=False,
     )
 
-    # -- define task
+    # -- define task using 'is_single()'
     tasks = ["mask", "gender", "age"] if not is_single(args) else ['multi']
 
     # -- inference
@@ -164,6 +185,3 @@ if __name__ == "__main__":
     os.makedirs(output_dir, exist_ok=True)
 
     inference(data_dir, model_dir, output_dir, args)
-    
-def main():
-    pass

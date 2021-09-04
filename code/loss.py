@@ -30,7 +30,6 @@ class F1_Loss(nn.Module):
         assert y_pred.ndim == 2
         assert y_true.ndim == 1
         
-        #y_true = F.one_hot(y_true, 2).to(torch.float32)
         y_true = F.one_hot(y_true, self.classes).to(torch.float32)
         y_pred = F.softmax(y_pred, dim=1)
         
@@ -57,13 +56,12 @@ class LabelSmoothingLoss(nn.Module):
     def forward(self, pred, target):
         pred = pred.log_softmax(dim=self.dim)
         with torch.no_grad():
-            # true_dist = pred.data.clone()
             true_dist = torch.zeros_like(pred)
             true_dist.fill_(self.smoothing / (self.cls - 1))
             true_dist.scatter_(1, target.data.unsqueeze(1), self.confidence)
         return torch.mean(torch.sum(-true_dist * pred, dim=self.dim))
 
-def create_criterion(name):
+def create_criterion(name:str):
     loss_dict={
         'focal': FocalLoss,
         'f1': F1_Loss,

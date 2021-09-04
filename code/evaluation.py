@@ -28,19 +28,7 @@ def plot_confusion_matrix(cm, classes, normalize=False, title='Confusion matrix'
     plt.ylabel('True label')
     plt.xlabel('Predicted label')
 
-@torch.no_grad()
-def get_all_preds(model, loader, device):
-    all_preds = torch.tensor([])
-    all_preds = all_preds.to(device)
-    for images, labels in loader:
-        images = images.to(device)
-        labels = labels.to(device)
-        preds = model(images)
-        all_preds = torch.cat((all_preds, preds), dim=0)
-    
-    return all_preds
-
-def _confusion_matrix(all_preds, all_targets, classes):
+def confusion_matrix(all_preds, all_targets, classes):
     stacked = torch.stack((all_targets, all_preds), dim=1)
     cmt = torch.zeros(classes, classes, dtype=torch.int64)
     for p in stacked:
@@ -51,9 +39,3 @@ def _confusion_matrix(all_preds, all_targets, classes):
     
 def get_stacked(targets, preds):
     return torch.stack((targets, preds), dim=1)
-
-def get_f1_score(targets, preds):
-    pass
-
-def get_confusion_matrix(targets, preds):
-    pass
